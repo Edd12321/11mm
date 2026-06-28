@@ -8,6 +8,16 @@
 #include <stack>
 #include <stdexcept>
 
+#if __cplusplus < 201402L
+	// from da interwebz
+	template<typename T, typename... Args>
+	std::unique_ptr<T> make_unique(Args&&... args) {
+		return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+	}
+#else
+	using std::make_unique;
+#endif
+
 class preprocessor {
 private:
 	struct stream_ptr {
@@ -70,7 +80,7 @@ public:
 			} else if (str == "$[") {
 				if (!read(str))
 					throw std::runtime_error("no filename\n");
-				auto fin = std::make_unique<std::ifstream>(str);
+				auto fin = make_unique<std::ifstream>(str);
 				if (!*fin)
 					throw std::runtime_error(str + ": " + std::strerror(errno));
 				if (!read(str) || str != "$]")
