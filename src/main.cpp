@@ -4,9 +4,12 @@
 #include <fstream>
 #include <iostream>
 #include <istream>
+#include <iterator>
 #include <memory>
-#include <stack>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #if __cplusplus < 201402L
 	// from da interwebz
@@ -23,26 +26,28 @@ private:
 	struct stream_ptr {
 		std::istream *ptr;
 		std::unique_ptr<std::ifstream> file;
+		std::string filename;
+		stream_ptr() = delete;
 		stream_ptr(std::istream& p)
 				: ptr(&p) {
 		}
-		stream_ptr(std::unique_ptr<std::ifstream> f)
-				: ptr(f.get()), file(std::move(f)) {
+		stream_ptr(std::unique_ptr<std::ifstream>&& f, std::string fname)
+				: ptr(f.get()), file(std::move(f)), filename(std::move(fname)) {
 		}
 	};
-	std::stack<stream_ptr> stk;
+	std::vector<stream_ptr> stk;
 
 	bool read(std::string& str) {
 		if (stk.empty())
 			throw std::runtime_error("can't read\n");
-		auto *in = &stk.top();
+		auto *in = &stk.back();
 		while (!(*(in->ptr) >> str)) {
 			if (!in->ptr->eof())
 				throw std::runtime_error("read error\n");
-			stk.pop();
+			stk.pop_back();
 			if (stk.empty())
 				return false;
-			in = &stk.top();
+			in = &stk.back();
 		}
 		return true;
 	}
@@ -54,21 +59,21 @@ public:
 	preprocessor& operator=(preprocessor&&) = delete;
 
 	preprocessor(std::istream& in) {
-		stk.emplace(in);
+		stk.emplace_back(in);
 	}
 	preprocessor(std::string const& file) {
 		if (file == "-") {
-			stk.emplace(std::cin);
+			stk.emplace_back(std::cin);
 			return;
 		}
-		std::ifstream fin(file);
+		auto fin = make_unique<std::ifstream>(file);
 		if (!fin)
 			throw std::runtime_error(file + ": " + std::strerror(errno));
-		stk.emplace(fin);
+		stk.emplace_back(std::move(fin), file);
 	}
 
 	operator bool() {
-		return !stk.empty() && *(stk.top().ptr);
+		return !stk.empty() && *(stk.back().ptr);
 	}
 	preprocessor& operator>>(std::string& str) {
 		while (read(str)) {
@@ -80,13 +85,26 @@ public:
 			} else if (str == "$[") {
 				if (!read(str))
 					throw std::runtime_error("no filename\n");
-				auto fin = make_unique<std::ifstream>(str);
-				if (!*fin)
-					throw std::runtime_error(str + ": " + std::strerror(errno));
-				if (!read(str) || str != "$]")
-					throw std::runtime_error("expected end of file inclusion\n");
-				stk.emplace(std::move(fin));
-			
+				bool found = false;
+				for (auto const& it : stk) {
+					if (it.filename == str) {
+						found = true;
+						break;
+					}
+				}
+				if (!found) {
+					auto fin = make_unique<std::ifstream>(str);
+					if (!*fin)
+						throw std::runtime_error(str + ": " + std::strerror(errno));
+					std::string brk;
+					if (!read(brk) || brk != "$]")
+						throw std::runtime_error("expected end of file inclusion\n");
+					stk.emplace_back(std::move(fin), str);
+				} else {
+					// Silent ignore if it appeared once
+					if (!read(str) || str != "$]")
+						throw std::runtime_error("expected end of file inclusion\n");
+				}
 			} else break;
 		}
 		return *this;
@@ -94,9 +112,60 @@ public:
 };
 
 void eval(preprocessor& pre) {
+	struct block {
+		std::unordered_set<std::string> vars;
+		std::unordered_map<std::string, std::unordered_set<std::string>> disjs;
+	};
+	std::vector<block> stk(1);
+	std::unordered_set<std::string> consts;
 	std::string str;
+
 	while (pre >> str) {
-		// wip
+		// Open/close a block
+		if (str == "${") {
+			stk.emplace_back();
+		} else if (str == "$}") {
+			if (stk.size() == 1)
+				throw std::runtime_error("no block to close\n");
+			stk.pop_back();
+		
+		// Variable
+		} else if (str == "$v") {
+			while (pre >> str) {
+				if (str == "$.")
+					break;
+				for (auto const& it : stk) {
+					if (it.vars.find(str) != it.vars.end())
+						throw std::runtime_error("variable " + str + " already exists\n");
+				}
+				stk.back().vars.insert(std::move(str));
+			}
+		
+		// Constant
+		} else if (str == "$c") {
+			while (pre >> str) {
+				if (str == "$.")
+					break;
+				if (stk.size() != 1)
+					throw std::runtime_error("constant declared inside block\n");
+				consts.insert(std::move(str));
+			}
+	
+		// Disjoint var condition
+		} else if (str == "$d") {
+			std::unordered_set<std::string> arr;
+			while (pre >> str) {
+				if (str == "$.")
+					break;
+				arr.insert(std::move(str));
+			}
+			for (auto it = arr.begin(); it != arr.end(); ++it) {
+				for (auto jt = std::next(it); jt != arr.end(); ++jt) {
+					stk.back().disjs[*it].insert(*jt);
+					stk.back().disjs[*jt].insert(*it);
+				}
+			}
+		}
 	}
 }
 
