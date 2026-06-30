@@ -69,7 +69,7 @@ public:
 			return;
 		}
 		auto fin = make_unique<std::ifstream>(file);
-		if (!fin)
+		if (!*fin)
 			throw std::runtime_error(file + ": " + std::strerror(errno));
 		stk.emplace_back(std::move(fin), file);
 	}
@@ -80,9 +80,13 @@ public:
 	preprocessor& operator>>(std::string& str) {
 		while (read(str)) {
 			if (str == "$(") {
-				while (read(str))
-					if (str == "$)")
+				int cmpnd = 1;
+				while (read(str)) {
+					if (str == "$(") ++cmpnd;
+					if (str == "$)") --cmpnd;
+					if (!cmpnd)
 						break;
+				}
 	
 			} else if (str == "$[") {
 				if (!read(str))
@@ -115,15 +119,26 @@ public:
 
 void eval(preprocessor& pre) {
 	struct block {
-		std::unordered_set<std::string> vars;
+		// Variables and constants
+		std::unordered_map<std::string, char> varorconst;
+		// Disjoint variable restrictions
 		std::unordered_map<std::string, std::unordered_set<std::string>> disjs;
+		// Floating hypotheses
+		std::unordered_map<std::string, std::string> var2float;
+		std::unordered_map<std::string, std::unordered_set<std::string>> float2vars;
+		// Essential hypothesis
+		std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>> ess;
 	};
 	std::vector<block> stk(1);
-	std::unordered_set<std::string> consts;
-	std::unordered_map<std::string, std::string> var2float;
-	std::unordered_map<std::string, std::unordered_set<std::string>> type2vars;
+	auto find_varorconst = [&](std::string const& nam) {
+		for (auto it = stk.rbegin(); it != stk.rend(); ++it) {
+			auto fnd = it->varorconst.find(nam);
+			if (fnd != it->varorconst.end())
+				return fnd->second;
+		}
+		return 'X';
+	};
 	std::string str;
-
 	while (pre >> str) {
 		// Open/close a block
 		if (str == "${") {
@@ -133,30 +148,17 @@ void eval(preprocessor& pre) {
 				throw std::runtime_error("no block to close\n");
 			stk.pop_back();
 		
-		// Variable
-		} else if (str == "$v") {
+		// Variable/constant
+		} else if (str == "$v" || str == "$c") {
+			char c = str[1];
 			while (pre >> str) {
 				if (str == "$.")
 					break;
-				for (auto const& it : stk) {
-					if (it.vars.find(str) != it.vars.end())
-						throw std::runtime_error("variable " + str + " already exists\n");
-				}
-				stk.back().vars.insert(std::move(str));
+				if (stk.back().varorconst.find(str) != stk.back().varorconst.end())
+					throw std::runtime_error(str + " already exists in current scope\n");
+				stk.back().varorconst.emplace(std::move(str), c);
 			}
 		
-		// Constant
-		} else if (str == "$c") {
-			while (pre >> str) {
-				if (str == "$.")
-					break;
-				if (stk.size() != 1)
-					throw std::runtime_error("constant " + str + " declared inside block\n");
-				if (consts.find(str) != consts.end())
-					throw std::runtime_error("constant " + str + " already exists\n");
-				consts.insert(std::move(str));
-			}
-	
 		// Disjoint var condition
 		} else if (str == "$d") {
 			std::unordered_set<std::string> arr;
@@ -175,54 +177,44 @@ void eval(preprocessor& pre) {
 			}
 		
 		} else {
+			std::string name = std::move(str);
 			// Floating hypothesis
 			std::string str2;
 			pre >> str2;
 			if (str2 == "$f") {
 				std::string typecode, var;
-				pre >> typecode >> var >> str2;
-				if (str2 != "$.")
-					throw std::runtime_error("unclosed floating hypothesis\n");
-				bool found = false;
-				for (auto const& it : stk) {
-					if (it.vars.find(var) != it.vars.end()) {
-						found = true;
+				pre >> typecode;
+				while (pre >> var) {
+					if (var == "$.")
 						break;
-					}
+					if (find_varorconst(var) != 'v')
+						throw std::runtime_error("no such variable " + var + '\n');
+					if (stk.back().var2float.find(var) != stk.back().var2float.end())
+						throw std::runtime_error("floating hypothesis for " + var + " already exists\n");
+					stk.back().var2float[var] = typecode;
+					stk.back().float2vars[typecode].insert(std::move(var));
 				}
-				if (!found)
-					throw std::runtime_error("no such variable " + var + '\n');
-				if (consts.find(typecode) == consts.end())
-					throw std::runtime_error("no such constant " + typecode + '\n');
 				
-				if (var2float.find(var) != var2float.end())
-					throw std::runtime_error("typecode for " + var + " already exists\n");
-				var2float[var] = typecode;
-				
-				type2vars[typecode].insert(var);
-			
 
 			// Essential hypothesis
 			} else if (str2 == "$e") {
 				std::vector<std::string> seq;
-				std::string typecode;
+				std::string typecode, var;
 				pre >> typecode;
-				if (type2vars.find(typecode) == type2vars.end())
+				if (find_varorconst(typecode) != 'c')
 					throw std::runtime_error("no such typecode " + typecode + '\n');
-				while (pre >> str) {
-					if (str == "$.")
+				while (pre >> var) {
+					if (var == "$.")
 						break;
-					bool found = false;
-					for (auto const& it : stk) {
-						if (it.vars.find(str) != it.vars.end()) {
-							found = true;
-							break;
-						}
-					}
-					if (!found && consts.find(str) == consts.end())
-						throw std::runtime_error("no such symbol " + str + '\n');
-					seq.push_back(std::move(str));
+					if (find_varorconst(var) == 'X')
+						throw std::runtime_error("no such symbol " + var + '\n');
+					seq.push_back(std::move(var));
 				}
+				stk.back().ess[name] = std::move(std::make_pair(std::move(typecode), std::move(seq)));
+			
+			} else if (str2 == "$a") {
+				// WIP
+			} else if (str2 == "$p") {
 				// WIP
 			}
 		}
