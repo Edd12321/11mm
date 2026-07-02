@@ -3,12 +3,12 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iostream>
 #include <istream>
 #include <limits>
 #include <memory>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -38,7 +38,7 @@ private:
 		stream_ptr(std::unique_ptr<std::ifstream>&& f, std::string fname)
 				: ptr(f.get()), file(std::move(f)), filename(std::move(fname)) {}
 	};
-	std::vector<stream_ptr> stk;
+	std::deque<stream_ptr> stk;
 	std::size_t& lc() { return stk.back().lc; }
 	std::size_t& cc() { return stk.back().cc; }
 
@@ -201,6 +201,9 @@ void eval(preprocessor& pre) {
 			AXIOM,
 			PROVEABLE
 		} kind;
+		std::unordered_set<symid> mandvars;
+		std::vector<stmt> mandhyps;
+		std::unordered_map<symid, std::unordered_set<symid>> manddisjs;
 	};
 	struct stmtref {
 		std::size_t stk_idx, hyps_idx; // HYPOTHESIS
@@ -390,17 +393,64 @@ void eval(preprocessor& pre) {
 					seq.push_back(fnd->second);
 				}
 
+				// 1) mandatory variables == variables appearing in the sequence of
+				// math symbols together with the variables appearing in all
+				// essential hypotheses thus far
 				std::unordered_set<symid> mandvars;
-				for (auto const& it : seq) {
-					if (it.kind == mathsym::skind::VARIABLE) {
-						// [...] WIP
+
+				// 2) mandatory hypotheses == essential hypotheses together with
+				// all floating hypotheses containing mandatory variables
+				std::vector<stmt> mandhyps;
+		
+				// 3) mandatory disjoint variable condition == disjoint variable
+				// condition where both variables are mandatory variables
+				std::unordered_map<symid, std::unordered_set<symid>> manddisjs;
+
+				for (auto const& w : seq)
+					if (w.kind == mathsym::skind::VARIABLE)
+						/* 1) */ mandvars.insert(w.id);
+				
+				for (auto const& it : stk) {
+					for (auto const& hyp : it.hyps) {
+						switch (hyp.kind) {
+							case stmt::stmtkind::ESSENTIAL:
+								for (auto const& w : hyp.seq)
+									if (w.kind == mathsym::skind::VARIABLE)
+										/* 1) */ mandvars.insert(w.id);
+								
+								/* 2) */ mandhyps.emplace_back(hyp);
+								break;
+
+							case stmt::stmtkind::FLOATING:
+								if (mandvars.find(hyp.seq[1].id) != mandvars.end())
+									/* 2) */ mandhyps.emplace_back(hyp);
+								break;
+
+							default:
+								pre.error("UNREACHABLE!");
+								break;
+						}
 					}
+					for (auto const& dc : it.disjs)
+						if (mandvars.find(dc.first) != mandvars.end())
+							for (auto const& var2 : dc.second)
+								if (mandvars.find(var2) != mandvars.end())
+									/* 3) */ manddisjs[dc.first].insert(var2);
+
 				}
+
+
 				//
 				// Axiomatic assertion
 				//
 				if (str == "$a") {
-					// WIP
+					stmts.push_back({
+						std::move(seq),        // .seq
+						stmt::stmtkind::AXIOM, // .kind
+						std::move(mandvars),   // .mandvars
+						std::move(mandhyps),   // .mandhyps
+						std::move(manddisjs)   // .manddisjs
+					});
 
 				//
 				// Proveable assertion
