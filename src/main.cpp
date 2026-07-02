@@ -35,7 +35,8 @@ private:
 		std::size_t lc = 1, cc = 0;
 		stream_ptr() = delete;
 		stream_ptr(std::istream& p) : ptr(&p) {}
-		stream_ptr(std::unique_ptr<std::ifstream>&& f, std::string fname) : ptr(f.get()), file(std::move(f)), filename(std::move(fname)) {}
+		stream_ptr(std::unique_ptr<std::ifstream>&& f, std::string fname)
+				: ptr(f.get()), file(std::move(f)), filename(std::move(fname)) {}
 	};
 	std::vector<stream_ptr> stk;
 	std::size_t& lc() { return stk.back().lc; }
@@ -77,9 +78,11 @@ private:
 						/* empty */ {
 							str += c;
 							auto d = in->ptr->peek();
-							if (d == std::char_traits<char>::eof() || std::isspace(static_cast<unsigned char>(d)) || !(in->ptr->get(c))) {
-								brk = true;
-								break;
+							if (d == std::char_traits<char>::eof()
+							||  std::isspace(static_cast<unsigned char>(d))
+							||  !(in->ptr->get(c))) {
+									brk = true;
+									break;
 							}
 							++cc();
 						}
@@ -187,18 +190,30 @@ void eval(preprocessor& pre) {
 		} kind;
 	};
 	std::unordered_map<std::string, mathsym> str2sym;
+	std::unordered_map<symid, symid> sym2type;
 	auto symc = std::numeric_limits<symid>::min();
 	// Statements (hypotheses && assertions)
-	struct hypothesis {
+	struct stmt {
 		std::vector<mathsym> seq;
-		enum class hkind {
+		enum class stmtkind {
 			FLOATING,
-			ESSENTIAL
+			ESSENTIAL,
+			AXIOM,
+			PROVEABLE
+		} kind;
+	};
+	struct stmtref {
+		std::size_t stk_idx, hyps_idx; // HYPOTHESIS
+		std::size_t ass_idx;           // ASSUMPTION
+		enum class refkind {
+			ASSUMPTION,
+			HYPOTHESIS
 		} kind;
 	};
 	using label = unsigned int;
 	std::unordered_map<std::string, label> str2label;
-	std::unordered_map<symid, symid> sym2type;
+	std::unordered_map<label, stmtref> label2ref;
+	std::vector<stmt> stmts;
 	auto labc = std::numeric_limits<label>::min();
 
 	// Blocks
@@ -206,23 +221,27 @@ void eval(preprocessor& pre) {
 		// Variables
 		std::unordered_set<symid> vars;
 		// Disjoint variable conditions
-		std::set<std::pair<symid, symid>> disjs;
+		std::unordered_map<symid, std::unordered_set<symid>> disjs;
 		// Floating && essential hypothesis
-		std::vector<hypothesis> hyps;
+		std::vector<stmt> hyps;
 	};
 	std::vector<block> stk(1);
 	
 	std::string str;
 	while (pre >> str) {
+		//
 		// Scoping statement
+		//
 		if (str == "${") {
 			stk.emplace_back();
 		} else if (str == "$}") {
 			if (stk.size() == 1)
 				pre.error("can't close block here");
 			stk.pop_back();
-		
+
+		//
 		// Constant math symbol
+		//
 		} else if (str == "$c") {
 			if (stk.size() != 1)
 				pre.error("constant statement outside outermost block");
@@ -231,19 +250,21 @@ void eval(preprocessor& pre) {
 					break;
 				auto fnd = str2sym.find(str);
 				if (fnd == str2sym.end())
-					str2sym.emplace(std::move(str), mathsym{symc++, mathsym::skind::CONSTANT});
+					str2sym[std::move(str)] = {symc++, mathsym::skind::CONSTANT};
 				else
 					pre.error("symbol " + str + " already exists");
 			}
-		
+
+		//
 		// Variable math symbol
+		//
 		} else if (str == "$v") {
 			while (pre >> str) {
 				if (str == "$.")
 					break;
 				auto fnd = str2sym.find(str);
 				if (fnd == str2sym.end())
-					str2sym.emplace(std::move(str), mathsym{symc++, mathsym::skind::VARIABLE});
+					str2sym[std::move(str)] = {symc++, mathsym::skind::VARIABLE};
 				else {
 					if (fnd->second.kind == mathsym::skind::CONSTANT)
 						pre.error("symbol " + str + " already exists as a constant");
@@ -255,7 +276,9 @@ void eval(preprocessor& pre) {
 				}
 			}
 		
+		//
 		// Disjoint variable condition
+		//
 		} else if (str == "$d") {
 			std::unordered_set<symid> vars;
 			while (pre >> str) {
@@ -270,10 +293,19 @@ void eval(preprocessor& pre) {
 			}
 			for (auto it = vars.begin(); it != vars.end(); ++it)
 				for (auto jt = std::next(it); jt != vars.end(); ++jt)
-					stk.back().disjs.emplace(std::min(*it, *jt), std::max(*it, *jt));
+					stk.back().disjs[std::min(*it, *jt)].insert(std::max(*it, *jt));
 		
 		} else {
-			std::string label = std::move(str), typestr;
+			std::string labstr = std::move(str), typestr;
+			// check label sanity
+			for (auto const& ch : labstr)
+				if (!std::isalnum(static_cast<unsigned char>(ch))
+				&&  ch != '.' && ch != '-' && ch != '_')
+					pre.error(labstr + " is not a valid label");
+			if (str2label.find(labstr) != str2label.end())
+				pre.error("label " + labstr + " was aleady used once");
+			str2label[labstr] = labc;
+
 			pre >> str >> typestr;
 			auto fnd = str2sym.find(typestr);
 			if (fnd == str2sym.end())
@@ -282,7 +314,9 @@ void eval(preprocessor& pre) {
 				pre.error("symbol " + typestr + " is not a constant (typecode), but a variable");
 			auto const& typecode = fnd->second;
 		
+			//
 			// Floating hypothesis
+			//
 			if (str == "$f") {
 				std::string var;
 				pre >> var;
@@ -301,18 +335,81 @@ void eval(preprocessor& pre) {
 				if (str != "$.")
 					pre.error("expected end of floating hypothesis");
 
-				std::vector<mathsym> vec = {typecode, varsym};
-				stk.back().hyps.push_back({std::move(vec), hypothesis::hkind::FLOATING});
-				sym2type.emplace(varsym.id, typecode.id);
-			
+				std::vector<mathsym> vec = { typecode, varsym };
+				stk.back().hyps.push_back({
+					std::move(vec),          // .seq
+					stmt::stmtkind::FLOATING // .kind
+				});
+				label2ref[labc] = {
+					stk.size() - 1,              // .stk_idx
+					stk.back().hyps.size() - 1,  // .hyps_idx
+					0,                           // .ass_idx
+					stmtref::refkind::HYPOTHESIS // .kind
+				};
+				sym2type[varsym.id] = typecode.id;
+	
+			//
+			// Essential hypothesis
+			//
 			} else if (str == "$e") {
 				std::string var;
+				std::vector<mathsym> vec = { typecode };
 				while (pre >> var) {
 					if (var == "$.")
 						break;
+					auto fnd = str2sym.find(var);
+					if (fnd == str2sym.end())
+						pre.error("symbol " + var + " not found");
+					vec.push_back(fnd->second);
+				}
+				stk.back().hyps.push_back({
+					std::move(vec),            // .seq
+					stmt::stmtkind::ESSENTIAL  // .kind
+				});
+				label2ref[labc] = {
+					stk.size() - 1,              // .stk_idx
+					stk.back().hyps.size() - 1,  // .hyps_idx
+					0,                           // .ass_idx
+					stmtref::refkind::HYPOTHESIS // .kind
+				};
+			
+			} else {
+				std::string stopstr, var;
+				if (str == "$a")
+					stopstr = "$.";
+				else if (str == "$p")
+					stopstr = "$=";
+				else pre.error("invalid statement " + str);
+				std::vector<mathsym> seq = { typecode };
+				while (pre >> var) {
+					if (var == stopstr)
+						break;
+					auto fnd = str2sym.find(var);
+					if (fnd == str2sym.end())
+						pre.error("symbol " + var + " not found");
+					seq.push_back(fnd->second);
+				}
+
+				std::unordered_set<symid> mandvars;
+				for (auto const& it : seq) {
+					if (it.kind == mathsym::skind::VARIABLE) {
+						// [...] WIP
+					}
+				}
+				//
+				// Axiomatic assertion
+				//
+				if (str == "$a") {
+					// WIP
+
+				//
+				// Proveable assertion
+				//
+				} else if (str == "$p") {
 					// WIP
 				}
 			}
+			++labc;
 		}
 	}
 }
