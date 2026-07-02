@@ -9,6 +9,7 @@
 #include <istream>
 #include <limits>
 #include <memory>
+#include <stack>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -207,9 +208,9 @@ void eval(preprocessor& pre) {
 	};
 	struct stmtref {
 		std::size_t stk_idx, hyps_idx; // HYPOTHESIS
-		std::size_t ass_idx;           // ASSUMPTION
+		std::size_t ass_idx;           // ASSERTION
 		enum class refkind {
-			ASSUMPTION,
+			ASSERTION,
 			HYPOTHESIS
 		} kind;
 	};
@@ -227,6 +228,9 @@ void eval(preprocessor& pre) {
 		std::unordered_map<symid, std::unordered_set<symid>> disjs;
 		// Floating && essential hypothesis
 		std::vector<stmt> hyps;
+
+
+		std::unordered_set<label> labels_to_del;
 	};
 	std::vector<block> stk(1);
 	
@@ -241,6 +245,8 @@ void eval(preprocessor& pre) {
 			if (stk.size() == 1)
 				pre.error("can't close block here");
 			stk.pop_back();
+			for (auto const& l : stk.back().labels_to_del)
+				label2ref.erase(l);
 
 		//
 		// Constant math symbol
@@ -349,6 +355,7 @@ void eval(preprocessor& pre) {
 					0,                           // .ass_idx
 					stmtref::refkind::HYPOTHESIS // .kind
 				};
+				stk.back().labels_to_del.insert(labc);
 				sym2type[varsym.id] = typecode.id;
 	
 			//
@@ -375,6 +382,7 @@ void eval(preprocessor& pre) {
 					0,                           // .ass_idx
 					stmtref::refkind::HYPOTHESIS // .kind
 				};
+				stk.back().labels_to_del.insert(labc);
 			
 			} else {
 				std::string stopstr, var;
@@ -438,25 +446,54 @@ void eval(preprocessor& pre) {
 									/* 3) */ manddisjs[dc.first].insert(var2);
 
 				}
-
-
+				bool proved = false;
+				
 				//
 				// Axiomatic assertion
 				//
 				if (str == "$a") {
+					proved = true;
+
+				//
+				// Proveable assertion
+				//
+				} else if (str == "$p") {
+					std::vector<stmtref> steps;
+					std::stack<std::vector<mathsym>> proof_stk;
+					while (pre >> str) {
+						if (str == "$.")
+							break;
+						auto fnd = str2label.find(str);
+						if (fnd == str2label.end())
+							pre.error("label " + str + " not found");
+						auto fnd2 = label2ref.find(fnd->second);
+						if (fnd2 == label2ref.end())
+							pre.error("label " + str + " not valid anymore");
+						steps.emplace_back(fnd2->second);
+					}
+
+					for (auto const& step : steps) {
+						switch (step.kind) {
+							case stmtref::refkind::HYPOTHESIS:
+								proof_stk.push(stk[step.stk_idx].hyps[step.hyps_idx].seq);
+								break;
+							
+							case stmtref::refkind::ASSERTION:
+								// WIP
+								break;
+						}
+					}
+
+				}
+
+				if (proved) {
 					stmts.push_back({
 						std::move(seq),        // .seq
 						stmt::stmtkind::AXIOM, // .kind
 						std::move(mandvars),   // .mandvars
 						std::move(mandhyps),   // .mandhyps
 						std::move(manddisjs)   // .manddisjs
-					});
-
-				//
-				// Proveable assertion
-				//
-				} else if (str == "$p") {
-					// WIP
+					});	
 				}
 			}
 			++labc;
