@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <cstddef>
@@ -9,7 +10,6 @@
 #include <istream>
 #include <limits>
 #include <memory>
-#include <stack>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -189,6 +189,12 @@ void eval(preprocessor& pre) {
 			VARIABLE,
 			CONSTANT
 		} kind;
+		bool operator==(mathsym const& rhs) const {
+			return id == rhs.id && kind == rhs.kind;
+		}
+		bool operator!=(mathsym const& rhs) const {
+			return id != rhs.id || kind != rhs.kind;
+		}
 	};
 	std::unordered_map<std::string, mathsym> str2sym;
 	std::unordered_map<symid, symid> sym2type;
@@ -244,9 +250,9 @@ void eval(preprocessor& pre) {
 		} else if (str == "$}") {
 			if (stk.size() == 1)
 				pre.error("can't close block here");
-			stk.pop_back();
 			for (auto const& l : stk.back().labels_to_del)
 				label2ref.erase(l);
+			stk.pop_back();
 
 		//
 		// Constant math symbol
@@ -444,8 +450,34 @@ void eval(preprocessor& pre) {
 							for (auto const& var2 : dc.second)
 								if (mandvars.find(var2) != mandvars.end())
 									/* 3) */ manddisjs[dc.first].insert(var2);
-
 				}
+
+				// the book is very stupid and unclear about this:
+				// if you wanna use a $p or $a statement, it MUST have a frame
+				// that means in this part of the code:
+				//
+				// 1) each variable in mandvars must have an active $f
+				// 2) no two $f statements contain the same variable
+				// 3) the $f of any variable must be before its $e
+				std::unordered_set<symid> floats;
+				for (auto const& hyp : mandhyps) {
+					if (hyp.kind == stmt::stmtkind::FLOATING) {
+						auto varid = hyp.seq[1].id;
+						if (floats.find(varid) != floats.end())
+							/* 2) */ pre.error("two floating hypotheses in the associated "
+							                   "frame share the same variable");
+						floats.insert(varid);
+					
+					} else if (hyp.kind == stmt::stmtkind::ESSENTIAL) {
+						for (auto const& sym : hyp.seq)
+							if (sym.kind == mathsym::skind::VARIABLE && floats.find(sym.id) == floats.end())
+								/* 3) */ pre.error("essential hypothesis in the associated "
+								                   "frame doesn't have a floating hypothesis before it");
+					}
+				}
+				if (floats.size() != mandvars.size())
+					/* 1) */ pre.error("not every mandatory variable has an associated floating hypothesis");
+
 				bool proved = false;
 				
 				//
@@ -459,41 +491,59 @@ void eval(preprocessor& pre) {
 				//
 				} else if (str == "$p") {
 					std::vector<stmtref> steps;
-					std::stack<std::vector<mathsym>> proof_stk;
-					while (pre >> str) {
-						if (str == "$.")
+					std::vector<std::vector<mathsym>> proof_stk;
+					while (pre >> var) {
+						if (var == "$.")
 							break;
-						auto fnd = str2label.find(str);
+						auto fnd = str2label.find(var);
 						if (fnd == str2label.end())
-							pre.error("label " + str + " not found");
+							pre.error("label " + var + " not found");
 						auto fnd2 = label2ref.find(fnd->second);
 						if (fnd2 == label2ref.end())
-							pre.error("label " + str + " not valid anymore");
+							pre.error("label " + var + " not valid anymore");
 						steps.emplace_back(fnd2->second);
 					}
-
+					auto ass_seq = seq; // this gets modified (copy)
 					for (auto const& step : steps) {
 						switch (step.kind) {
 							case stmtref::refkind::HYPOTHESIS:
-								proof_stk.push(stk[step.stk_idx].hyps[step.hyps_idx].seq);
+								proof_stk.push_back(stk[step.stk_idx].hyps[step.hyps_idx].seq);
 								break;
 							
 							case stmtref::refkind::ASSERTION:
-								// WIP
+								/* empty */ {
+									auto const& ass = stmts[step.ass_idx];
+									
+									if (ass.mandhyps.size() > proof_stk.size())
+										pre.error("stack underflow");
+
+									
+								}
 								break;
 						}
 					}
 
 				}
 
-				if (proved) {
+				if (!proved) {
+					pre.error("theorem " + labstr + " not proved!");
+
+				} else {
 					stmts.push_back({
-						std::move(seq),        // .seq
-						stmt::stmtkind::AXIOM, // .kind
-						std::move(mandvars),   // .mandvars
-						std::move(mandhyps),   // .mandhyps
-						std::move(manddisjs)   // .manddisjs
-					});	
+						std::move(seq),                  // .seq
+						str == "$a"
+							? stmt::stmtkind::AXIOM
+							: stmt::stmtkind::PROVEABLE, // .kind
+						std::move(mandvars),             // .mandvars
+						std::move(mandhyps),             // .mandhyps
+						std::move(manddisjs)             // .manddisjs
+					});
+					label2ref[labc] = {
+						0,                           // .stk_idx
+						0,                           // .hyps_idx
+						stmts.size() - 1,            // .ass_idx
+						stmtref::refkind::ASSERTION  // .kind
+					};
 				}
 			}
 			++labc;
