@@ -106,7 +106,7 @@ public:
 	std::size_t const& cc() const { return stk.back().cc; }
 	template<typename T>
 	void error(T const& msg, bool fatal = true) {
-		std::string info = "ERROR ";
+		std::string info = "[ERROR] ";
 		if (!stk.empty()) {
 			if (!stk.back().filename.empty())
 				info += "In file " + stk.back().filename + ": ";
@@ -137,7 +137,7 @@ public:
 		stk.emplace_back(std::move(fin), file);
 	}
 
-	operator bool() {
+	operator bool() const {
 		return !stk.empty() && *(stk.back().ptr);
 	}
 	preprocessor& operator>>(std::string& str) {
@@ -430,13 +430,13 @@ void eval(preprocessor& pre) {
 								if (w.kind == mathsym::skind::VARIABLE)
 									/* 1) */ mandvars.insert(w.id);
 
-				std::vector<stmt> mande, mandf;
+				//std::vector<stmt> mande, mandf;
 				for (auto const& it : stk) {
 					for (auto const& hyp : it.hyps) {
 						if (hyp.kind == stmt::stmtkind::ESSENTIAL)
-							/* 2) */ mande.push_back(hyp);
+							/* 2) */ mandhyps.push_back(hyp);
 						else if (mandvars.find(hyp.seq[1].id) != mandvars.end())
-							/* 2) */ mandf.push_back(hyp);
+							/* 2) */ mandhyps.push_back(hyp);
 					}
 					for (auto const& dc : it.disjs)
 						if (mandvars.find(dc.first) != mandvars.end())
@@ -444,8 +444,8 @@ void eval(preprocessor& pre) {
 								if (mandvars.find(var2) != mandvars.end())
 									/* 3) */ manddisjs[std::min(dc.first, var2)].insert(std::max(dc.first, var2));
 				}
-				for (auto& it : mandf) mandhyps.push_back(std::move(it));
-				for (auto& it : mande) mandhyps.push_back(std::move(it));
+				//for (auto& it : mandf) mandhyps.push_back(std::move(it));
+				//for (auto& it : mande) mandhyps.push_back(std::move(it));
 
 				// the book is very stupid and unclear about this:
 				// if you wanna use a $p or $a statement, it MUST have a frame
@@ -487,8 +487,21 @@ void eval(preprocessor& pre) {
 				} else if (str == "$p") {
 					std::vector<stmtref> steps;
 					std::vector<std::vector<mathsym>> proof_stk;
-					while (pre >> var) {
-						if (var == "$.")
+					bool compressed = false;
+
+					pre >> var;
+					if (var == "$.")
+						pre.error("premature end of proof");
+					if (var == "(")
+						compressed = true;
+
+					do {
+						if (var == "$.") {
+							if (compressed)
+								pre.error("premature end of compressed proof");
+							break;
+						}
+						if (compressed && var == ")")
 							break;
 						auto fnd = str2label.find(var);
 						if (fnd == str2label.end())
@@ -497,7 +510,24 @@ void eval(preprocessor& pre) {
 						if (fnd2 == label2ref.end())
 							pre.error("label " + var + " not valid anymore");
 						steps.emplace_back(fnd2->second);
+					} while (pre >> var);
+
+					if (compressed) {
+						std::vector<stmtref> list = std::move(steps);
+						std::string bigstr;
+						steps.clear();
+						while (pre >> var) {
+							if (var == "$.")
+								break;
+							bigstr += var;	
+						}
+						if (bigstr.empty())
+							pre.error("empty compressed proof");
+
+						pre.error("compressed format is a WIP");
+						// wip
 					}
+
 					for (auto const& step : steps) {
 						switch (step.kind) {
 							case stmtref::refkind::HYPOTHESIS:
@@ -554,7 +584,7 @@ void eval(preprocessor& pre) {
 									//
 									// 2) each pair (a, b) of variables from the two sequences must
 									// exist in an active disjoint variable statement of the proof
-									// ($p)
+									// (i. e. any $d a b $. before our $p)
 									for (auto const& v1 : ass.manddisjs) {
 										for (auto const& v2 : v1.second) {
 											auto f1 = substmap.find(v1.first);
@@ -572,8 +602,15 @@ void eval(preprocessor& pre) {
 
 													auto X = std::min(x.id, y.id);
 													auto Y = std::max(x.id, y.id);
-													auto fnd1 = manddisjs.find(X);
-													if (fnd1 == manddisjs.end() || fnd1->second.find(Y) == fnd1->second.end())
+
+													bool ok = false;
+													for (auto const& it : stk) {
+														auto fnd1 = it.disjs.find(X);
+														if (fnd1 != it.disjs.end())
+															if (fnd1->second.find(Y) != fnd1->second.end())
+																ok = true;
+													}
+													if (!ok)
 														/* 2) */ pre.error("disjoint variable condition violation");
 												}
 											}
@@ -591,9 +628,10 @@ void eval(preprocessor& pre) {
 					if (proof_stk[0] != seq)
 						pre.error("proof of " + labstr + " doesn't prove the correct statement");
 
-					std::cerr << "theorem " << labstr << " is OK!\n";
+					std::cerr << "[INFO] theorem " << labstr << " is OK!\n";
 					proved = true;
-				}
+				
+				} else pre.error("bad statement " + str);
 
 				if (!proved) {
 					pre.error("theorem " + labstr + " not proved!");
