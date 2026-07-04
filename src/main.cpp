@@ -423,34 +423,29 @@ void eval(preprocessor& pre) {
 				for (auto const& w : seq)
 					if (w.kind == mathsym::skind::VARIABLE)
 						/* 1) */ mandvars.insert(w.id);
-				
+				for (auto const& it : stk)
+					for (auto const& hyp : it.hyps)
+						if (hyp.kind == stmt::stmtkind::ESSENTIAL)
+							for (auto const& w : hyp.seq)
+								if (w.kind == mathsym::skind::VARIABLE)
+									/* 1) */ mandvars.insert(w.id);
+
+				std::vector<stmt> mande, mandf;
 				for (auto const& it : stk) {
 					for (auto const& hyp : it.hyps) {
-						switch (hyp.kind) {
-							case stmt::stmtkind::ESSENTIAL:
-								for (auto const& w : hyp.seq)
-									if (w.kind == mathsym::skind::VARIABLE)
-										/* 1) */ mandvars.insert(w.id);
-								
-								/* 2) */ mandhyps.emplace_back(hyp);
-								break;
-
-							case stmt::stmtkind::FLOATING:
-								if (mandvars.find(hyp.seq[1].id) != mandvars.end())
-									/* 2) */ mandhyps.emplace_back(hyp);
-								break;
-
-							default:
-								pre.error("UNREACHABLE!");
-								break;
-						}
+						if (hyp.kind == stmt::stmtkind::ESSENTIAL)
+							/* 2) */ mande.push_back(hyp);
+						else if (mandvars.find(hyp.seq[1].id) != mandvars.end())
+							/* 2) */ mandf.push_back(hyp);
 					}
 					for (auto const& dc : it.disjs)
 						if (mandvars.find(dc.first) != mandvars.end())
 							for (auto const& var2 : dc.second)
 								if (mandvars.find(var2) != mandvars.end())
-									/* 3) */ manddisjs[dc.first].insert(var2);
+									/* 3) */ manddisjs[std::min(dc.first, var2)].insert(std::max(dc.first, var2));
 				}
+				for (auto& it : mandf) mandhyps.push_back(std::move(it));
+				for (auto& it : mande) mandhyps.push_back(std::move(it));
 
 				// the book is very stupid and unclear about this:
 				// if you wanna use a $p or $a statement, it MUST have a frame
@@ -558,7 +553,7 @@ void eval(preprocessor& pre) {
 									// in common
 									//
 									// 2) each pair (a, b) of variables from the two sequences must
-									// exist in a mandatory disjoint variable statement of the proof
+									// exist in an active disjoint variable statement of the proof
 									// ($p)
 									for (auto const& v1 : ass.manddisjs) {
 										for (auto const& v2 : v1.second) {
@@ -635,7 +630,8 @@ int main(int argc, char **argv) {
 			preprocessor pre(argv[i]);
 			eval(pre);
 		}
-	} catch (...) {
+	} catch (std::runtime_error const& err) {
+		std::cerr << err.what() << '\n';
 		return EXIT_FAILURE;
 	}
 	return EXIT_SUCCESS;
