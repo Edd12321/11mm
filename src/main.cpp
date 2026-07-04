@@ -503,7 +503,6 @@ void eval(preprocessor& pre) {
 							pre.error("label " + var + " not valid anymore");
 						steps.emplace_back(fnd2->second);
 					}
-					auto ass_seq = seq; // this gets modified (copy)
 					for (auto const& step : steps) {
 						switch (step.kind) {
 							case stmtref::refkind::HYPOTHESIS:
@@ -513,16 +512,92 @@ void eval(preprocessor& pre) {
 							case stmtref::refkind::ASSERTION:
 								/* empty */ {
 									auto const& ass = stmts[step.ass_idx];
+									std::unordered_map<symid, std::vector<mathsym>> substmap;
 									
+									auto subst_ass_seq = [&](std::vector<mathsym> const& ass_seq) {
+										std::vector<mathsym> subst_seq;
+										for (auto const& it : ass_seq) {
+											auto fnd = substmap.find(it.id);
+											if (fnd != substmap.end())
+												for (auto const& jt : fnd->second)
+													subst_seq.push_back(jt);
+											else subst_seq.push_back(it);
+										}
+										return subst_seq;
+									};
+
+									// step 1: check unification && build substitution map
 									if (ass.mandhyps.size() > proof_stk.size())
 										pre.error("stack underflow");
-
 									
+									std::size_t base = proof_stk.size() - ass.mandhyps.size();
+									for (std::size_t i = 0; i < ass.mandhyps.size(); ++i) {
+										auto const& hyp = ass.mandhyps[i];
+
+										if (hyp.kind == stmt::stmtkind::FLOATING) {
+											if (hyp.seq[0] != proof_stk[base + i][0])
+												pre.error("couldn't unify (typecodes don't match)");
+
+											auto& map = substmap[hyp.seq[1].id];
+											map = proof_stk[base + i];
+											map.erase(map.begin());
+
+										} else if (hyp.kind == stmt::stmtkind::ESSENTIAL
+										       &&  subst_ass_seq(ass.seq) != proof_stk[base + i])
+											pre.error("couldn't unify");
+									}
+
+									// step 2: now get rid of the $e and $f
+									proof_stk.resize(base);
+								
+									// step 3: verify disjoint variable conditions
+									//
+									// 1) if two variables in the substitution map exist in a mandatory
+									// hypothesis' mandatory disjoint variable statement, their
+									// corresponding sequences that they map to should have no variables
+									// in common
+									//
+									// 2) each pair (a, b) of variables from the two sequences must
+									// exist in a mandatory disjoint variable statement of the proof
+									// ($p)
+									for (auto const& v1 : ass.manddisjs) {
+										for (auto const& v2 : v1.second) {
+											auto f1 = substmap.find(v1.first);
+											auto f2 = substmap.find(v2);
+
+											for (auto const& x : f1->second) {
+												if (x.kind != mathsym::skind::VARIABLE)
+													continue;
+												for (auto const& y : f2->second) {
+													if (y.kind != mathsym::skind::VARIABLE)
+														continue;
+
+													if (x == y)
+														/* 1) */ pre.error("disjoint variable condition violation");
+
+													auto X = std::min(x.id, y.id);
+													auto Y = std::max(x.id, y.id);
+													auto fnd1 = manddisjs.find(X);
+													if (fnd1 == manddisjs.end() || fnd1->second.find(Y) == fnd1->second.end())
+														/* 2) */ pre.error("disjoint variable condition violation");
+												}
+											}
+										}
+									}
+
+									// step 4: push the substituted assertion sequence back onto the stack
+									proof_stk.push_back(subst_ass_seq(ass.seq));
 								}
 								break;
 						}
 					}
+					if (proof_stk.size() != 1)
+						pre.error("proof of " + labstr + " should end with one element on the stack");
+					if (proof_stk[0] != seq)
+						pre.error("proof of " + labstr + " doesn't prove the correct statement");
 
+					std::cerr << "theorem " << labstr << " is OK!\n";
+					proved = true;
 				}
 
 				if (!proved) {
@@ -552,12 +627,16 @@ void eval(preprocessor& pre) {
 }
 
 int main(int argc, char **argv) {
-	if (argc == 1) {
-		preprocessor pre(std::cin);
-		eval(pre);
-	} else for (int i = 1; i < argc; ++i) {
-		preprocessor pre(argv[i]);
-		eval(pre);
+	try {
+		if (argc == 1) {
+			preprocessor pre(std::cin);
+			eval(pre);
+		} else for (int i = 1; i < argc; ++i) {
+			preprocessor pre(argv[i]);
+			eval(pre);
+		}
+	} catch (...) {
+		return EXIT_FAILURE;
 	}
 	return EXIT_SUCCESS;
 }
