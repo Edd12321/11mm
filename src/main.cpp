@@ -568,7 +568,7 @@ void eval(preprocessor& pre) {
 											map.erase(map.begin());
 
 										} else if (hyp.kind == stmt::stmtkind::ESSENTIAL
-										       &&  subst_ass_seq(ass.seq) != proof_stk[base + i])
+										       &&  subst_ass_seq(hyp.seq) != proof_stk[base + i])
 											pre.error("couldn't unify");
 									}
 
