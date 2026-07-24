@@ -630,7 +630,7 @@ void eval(preprocessor& pre) {
 					if (proof_stk[0] != seq)
 						pre.error("proof of " + labstr + " doesn't prove the correct statement");
 
-					std::cerr << "[INFO] theorem " << labstr << " is OK!\n";
+					std::cout << "[INFO] theorem " << labstr << " is OK!\n";
 					proved = true;
 				
 				} else pre.error("bad statement " + str);
@@ -662,13 +662,23 @@ void eval(preprocessor& pre) {
 }
 
 int main(int argc, char **argv) {
+	std::ios_base::sync_with_stdio(false);
+	std::cin.tie(nullptr);
 	try {
 		if (argc == 1) {
 			preprocessor pre(std::cin);
 			eval(pre);
+			std::cout << "[INFO] STDIN OK!\n";
 		} else for (int i = 1; i < argc; ++i) {
-			preprocessor pre(argv[i]);
-			eval(pre);
+			if (!std::strcmp(argv[i], "-")) {
+				preprocessor pre(std::cin);
+				eval(pre);
+				std::cout << "[INFO] STDIN OK!\n";
+			} else {
+				preprocessor pre(argv[i]);
+				eval(pre);
+				std::cout << "[INFO] DATABASE " << argv[i] << " OK!\n";
+			}
 		}
 	} catch (std::runtime_error const& err) {
 		std::cerr << err.what() << '\n';
