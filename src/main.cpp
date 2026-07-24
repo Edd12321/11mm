@@ -312,11 +312,13 @@ void eval(preprocessor& pre) {
 		
 		} else {
 			std::string labstr = std::move(str), typestr;
+			/*
 			// check label sanity
 			for (auto const& ch : labstr)
 				if (!std::isalnum(static_cast<unsigned char>(ch))
 				&&  ch != '.' && ch != '-' && ch != '_')
 					pre.error(labstr + " is not a valid label");
+			*/
 			if (str2label.find(labstr) != str2label.end())
 				pre.error("label " + labstr + " was aleady used once");
 			str2label[labstr] = labc;
