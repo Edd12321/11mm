@@ -537,7 +537,7 @@ void eval(preprocessor& pre) {
 							pre.error("empty compressed proof");
 
 						steps.clear();
-						unsigned long long curr = 0;
+						std::size_t curr = 0;
 						bool last20 = false;
 						for (auto const& ch : bigstr) {
 							// to work in non-ascii environments too i won't assume an ordering of the letters
