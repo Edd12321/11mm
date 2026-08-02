@@ -6,4 +6,5 @@ It currently verifies `set.mm` in ~3s
 
 ## Todo:
  - [ ] LaTeX and HTML conversion (`$t`);
- - [X] Compressed proof format (it's so over).
+ - [X] Compressed proof format (it's so over);
+ - [X] Basic unproved theorem support (`?`).

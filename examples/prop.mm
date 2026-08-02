@@ -72,3 +72,6 @@ ${
 		ax-mp
 	$.
 $}
+
+$( Law of Excluded Middle $)
+lem $p ( ph \/ -. ph ) $= ? $.

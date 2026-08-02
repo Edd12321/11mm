@@ -495,11 +495,17 @@ void eval(preprocessor& pre) {
 				//
 				} else if (str == "$p") {
 					std::vector<stmtref> steps;
-					std::vector<std::vector<mathsym>> proof_stk;
-					bool compressed = false;
+					std::vector<std::vector<mathsym>> proof_stk, copy_stk;
+					bool compressed = false, notproof = false;
 
 					while (pre >> var) {
+						if (var == "?" && !notproof) {
+							notproof = true;
+							pre >> var;
+						}
 						if (var == "$.") {
+							if (notproof)
+								goto _notproof_label;
 							if (compressed)
 								pre.error("premature end of compressed proof");
 							break;
@@ -584,7 +590,6 @@ void eval(preprocessor& pre) {
 						if (curr) pre.error("bad compressed proof string");
 					}
 
-					std::vector<std::vector<mathsym>> copy_stk;
 					for (auto const& step : steps) {
 						switch (step.kind) {
 							case stmtref::refkind::COMPRESSED_COPY:
@@ -697,6 +702,9 @@ void eval(preprocessor& pre) {
 						pre.error("proof of " + labstr + " doesn't prove the correct statement");
 
 					std::cout << "[INFO] theorem " << labstr << " is OK!\n";
+_notproof_label:
+					if (notproof)
+						std::cerr << "[WARN] theorem " << labstr << " is not yet proved!\n";
 					proved = true;
 				
 				} else pre.error("bad statement " + str);
