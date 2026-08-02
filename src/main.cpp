@@ -213,11 +213,14 @@ void eval(preprocessor& pre) {
 		std::unordered_map<symid, std::unordered_set<symid>> manddisjs;
 	};
 	struct stmtref {
+		std::size_t compr_idx;         // COMPRESSED REPEAT
 		std::size_t stk_idx, hyps_idx; // HYPOTHESIS
 		std::size_t ass_idx;           // ASSERTION
 		enum class refkind {
 			ASSERTION,
-			HYPOTHESIS
+			HYPOTHESIS,
+			COMPRESSED_COPY,
+			COMPRESSED_REPEAT
 		} kind;
 	};
 	using label = unsigned int;
@@ -358,6 +361,7 @@ void eval(preprocessor& pre) {
 					stmt::stmtkind::FLOATING // .kind
 				});
 				label2ref[labc] = {
+					0,                           // .compr_idx
 					stk.size() - 1,              // .stk_idx
 					stk.back().hyps.size() - 1,  // .hyps_idx
 					0,                           // .ass_idx
@@ -385,6 +389,7 @@ void eval(preprocessor& pre) {
 					stmt::stmtkind::ESSENTIAL  // .kind
 				});
 				label2ref[labc] = {
+					0,                           // .compr_idx
 					stk.size() - 1,              // .stk_idx
 					stk.back().hyps.size() - 1,  // .hyps_idx
 					0,                           // .ass_idx
@@ -417,7 +422,8 @@ void eval(preprocessor& pre) {
 				// 2) mandatory hypotheses == essential hypotheses together with
 				// all floating hypotheses containing mandatory variables
 				std::vector<stmt> mandhyps;
-		
+				std::vector<stmtref> mandhyprefs;
+
 				// 3) mandatory disjoint variable condition == disjoint variable
 				// condition where both variables are mandatory variables
 				std::unordered_map<symid, std::unordered_set<symid>> manddisjs;
@@ -433,14 +439,15 @@ void eval(preprocessor& pre) {
 									/* 1) */ mandvars.insert(w.id);
 
 				//std::vector<stmt> mande, mandf;
-				for (auto const& it : stk) {
-					for (auto const& hyp : it.hyps) {
-						if (hyp.kind == stmt::stmtkind::ESSENTIAL)
-							/* 2) */ mandhyps.push_back(hyp);
-						else if (mandvars.find(hyp.seq[1].id) != mandvars.end())
-							/* 2) */ mandhyps.push_back(hyp);
+				for (std::size_t i = 0; i < stk.size(); ++i) {
+					for (std::size_t j = 0; j < stk[i].hyps.size(); ++j) {
+						if (stk[i].hyps[j].kind == stmt::stmtkind::ESSENTIAL
+						||  mandvars.find(stk[i].hyps[j].seq[1].id) != mandvars.end()) {
+							/* 2) */ mandhyps.push_back(stk[i].hyps[j]);
+							/* 2) */ mandhyprefs.push_back({0, i, j, 0, stmtref::refkind::HYPOTHESIS});
+						}
 					}
-					for (auto const& dc : it.disjs)
+					for (auto const& dc : stk[i].disjs)
 						if (mandvars.find(dc.first) != mandvars.end())
 							for (auto const& var2 : dc.second)
 								if (mandvars.find(var2) != mandvars.end())
@@ -491,17 +498,15 @@ void eval(preprocessor& pre) {
 					std::vector<std::vector<mathsym>> proof_stk;
 					bool compressed = false;
 
-					pre >> var;
-					if (var == "$.")
-						pre.error("premature end of proof");
-					if (var == "(")
-						compressed = true;
-
-					do {
+					while (pre >> var) {
 						if (var == "$.") {
 							if (compressed)
 								pre.error("premature end of compressed proof");
 							break;
+						}
+						if (!compressed && var == "(") {
+							compressed = true;
+							continue;
 						}
 						if (compressed && var == ")")
 							break;
@@ -512,12 +517,11 @@ void eval(preprocessor& pre) {
 						if (fnd2 == label2ref.end())
 							pre.error("label " + var + " not valid anymore");
 						steps.emplace_back(fnd2->second);
-					} while (pre >> var);
+					};
 
 					if (compressed) {
 						std::vector<stmtref> list = std::move(steps);
 						std::string bigstr;
-						steps.clear();
 						while (pre >> var) {
 							if (var == "$.")
 								break;
@@ -526,16 +530,78 @@ void eval(preprocessor& pre) {
 						if (bigstr.empty())
 							pre.error("empty compressed proof");
 
-						pre.error("compressed format is a WIP");
-						// wip
+						steps.clear();
+						unsigned long long curr = 0;
+						bool last20 = false;
+						for (auto const& ch : bigstr) {
+							// to work in non-ascii environments too i won't assume an ordering of the letters
+							int chnum = 0;
+							switch (ch) {
+								case 'A': chnum = 1; break; case 'B': chnum = 2; break; case 'C': chnum = 3; break; case 'D': chnum = 4; break;
+								case 'E': chnum = 5; break; case 'F': chnum = 6; break; case 'G': chnum = 7; break; case 'H': chnum = 8; break;
+								case 'I': chnum = 9; break; case 'J': chnum = 10; break; case 'K': chnum = 11; break; case 'L': chnum = 12; break;
+								case 'M': chnum = 13; break; case 'N': chnum = 14; break; case 'O': chnum = 15; break; case 'P': chnum = 16; break;
+								case 'Q': chnum = 17; break; case 'R': chnum = 18; break; case 'S': chnum = 19; break; case 'T': chnum = 20; break;
+								case 'U': chnum = 21; break; case 'V': chnum = 22; break; case 'W': chnum = 23; break; case 'X': chnum = 24; break;
+								case 'Y': chnum = 25; break; case 'Z': chnum = 26; break;
+							}
+							if (!chnum)
+								pre.error("character " + std::string(1, ch) + " isn't uppercase letter");
+
+							// Z
+							if (chnum == 26) {
+								if (!last20)
+									pre.error("bad Z positioning");
+								steps.push_back({0, 0, 0, 0, stmtref::refkind::COMPRESSED_COPY});
+								last20 = false;
+
+							// U...Y
+							} else if (chnum >= 21 && chnum <= 25) {
+								curr = curr * 5 + chnum - 20;
+								last20 = false;
+
+							// A...T
+							} else {
+								curr = curr * 20 + chnum - 1;
+								if (curr < mandhyps.size())
+									steps.push_back(mandhyprefs[curr]);
+
+								else {
+									curr -= mandhyps.size();
+									if (curr < list.size())
+										steps.push_back(list[curr]);
+
+									else {
+										curr -= list.size();
+										steps.push_back({curr, 0, 0, 0, stmtref::refkind::COMPRESSED_REPEAT});
+									}
+								}
+
+								curr = 0;
+								last20 = true;
+							}
+						}
+						if (curr) pre.error("bad compressed proof string");
 					}
 
+					std::vector<std::vector<mathsym>> copy_stk;
 					for (auto const& step : steps) {
 						switch (step.kind) {
+							case stmtref::refkind::COMPRESSED_COPY:
+								if (proof_stk.empty())
+									pre.error("empty proof stack when trying to copy");
+								copy_stk.push_back(proof_stk.back());
+								break;
+							case stmtref::refkind::COMPRESSED_REPEAT:
+								if (step.compr_idx >= copy_stk.size())
+									pre.error("can't repeat that compressed index");
+								proof_stk.push_back(copy_stk[step.compr_idx]);
+								break;
+
 							case stmtref::refkind::HYPOTHESIS:
 								proof_stk.push_back(stk[step.stk_idx].hyps[step.hyps_idx].seq);
 								break;
-							
+
 							case stmtref::refkind::ASSERTION:
 								/* empty */ {
 									auto const& ass = stmts[step.ass_idx];
@@ -649,6 +715,7 @@ void eval(preprocessor& pre) {
 						std::move(manddisjs)             // .manddisjs
 					});
 					label2ref[labc] = {
+						0,                           // .compr_idx
 						0,                           // .stk_idx
 						0,                           // .hyps_idx
 						stmts.size() - 1,            // .ass_idx
