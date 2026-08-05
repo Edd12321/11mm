@@ -202,7 +202,7 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 				}
 		
 		} else {
-			string labstr = move(tok), stmtkind;
+			string labstr = std::move(tok), stmtkind;
 			ull typecode;
 			if (str2stmt.find(labstr) != str2stmt.end())
 				return error("Can't define label " + labstr + ", it already exists");
