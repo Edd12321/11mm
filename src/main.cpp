@@ -496,6 +496,7 @@ void eval(preprocessor& pre) {
 				} else if (str == "$p") {
 					std::vector<stmtref> steps;
 					std::vector<std::vector<mathsym>> proof_stk, copy_stk;
+					std::unordered_map<symid, std::vector<mathsym>> substmap;
 					bool compressed = false, notproof = false;
 
 					while (pre >> var) {
@@ -527,69 +528,65 @@ void eval(preprocessor& pre) {
 
 					if (compressed) {
 						std::vector<stmtref> list = std::move(steps);
-						std::string bigstr;
+						steps.clear();
+						std::size_t curr = 0;
+						bool last20 = false, ok = false;
 						while (pre >> var) {
 							if (var == "$.")
 								break;
-							bigstr += var;	
-						}
-						if (bigstr.empty())
-							pre.error("empty compressed proof");
-
-						steps.clear();
-						std::size_t curr = 0;
-						bool last20 = false;
-						for (auto const& ch : bigstr) {
-							// to work in non-ascii environments too i won't assume an ordering of the letters
-							int chnum = 0;
-							switch (ch) {
-								case 'A': chnum = 1; break; case 'B': chnum = 2; break; case 'C': chnum = 3; break; case 'D': chnum = 4; break;
-								case 'E': chnum = 5; break; case 'F': chnum = 6; break; case 'G': chnum = 7; break; case 'H': chnum = 8; break;
-								case 'I': chnum = 9; break; case 'J': chnum = 10; break; case 'K': chnum = 11; break; case 'L': chnum = 12; break;
-								case 'M': chnum = 13; break; case 'N': chnum = 14; break; case 'O': chnum = 15; break; case 'P': chnum = 16; break;
-								case 'Q': chnum = 17; break; case 'R': chnum = 18; break; case 'S': chnum = 19; break; case 'T': chnum = 20; break;
-								case 'U': chnum = 21; break; case 'V': chnum = 22; break; case 'W': chnum = 23; break; case 'X': chnum = 24; break;
-								case 'Y': chnum = 25; break; case 'Z': chnum = 26; break;
-							}
-							if (!chnum)
-								pre.error("character " + std::string(1, ch) + " isn't uppercase letter");
-
-							// Z
-							if (chnum == 26) {
-								if (!last20)
-									pre.error("bad Z positioning");
-								steps.push_back({0, 0, 0, 0, stmtref::refkind::COMPRESSED_COPY});
-								last20 = false;
-
-							// U...Y
-							} else if (chnum >= 21 && chnum <= 25) {
-								curr = curr * 5 + chnum - 20;
-								last20 = false;
-
-							// A...T
-							} else {
-								curr = curr * 20 + chnum - 1;
-								if (curr < mandhyps.size())
-									steps.push_back(mandhyprefs[curr]);
-
-								else {
-									curr -= mandhyps.size();
-									if (curr < list.size())
-										steps.push_back(list[curr]);
-
-									else {
-										curr -= list.size();
-										steps.push_back({curr, 0, 0, 0, stmtref::refkind::COMPRESSED_REPEAT});
-									}
+							ok = true;
+							for (auto const& ch : var) {
+								// to work in non-ascii environments too i won't assume an ordering of the letters
+								int chnum = 0;
+								switch (ch) {
+									case 'A': chnum = 1; break; case 'B': chnum = 2; break; case 'C': chnum = 3; break; case 'D': chnum = 4; break;
+									case 'E': chnum = 5; break; case 'F': chnum = 6; break; case 'G': chnum = 7; break; case 'H': chnum = 8; break;
+									case 'I': chnum = 9; break; case 'J': chnum = 10; break; case 'K': chnum = 11; break; case 'L': chnum = 12; break;
+									case 'M': chnum = 13; break; case 'N': chnum = 14; break; case 'O': chnum = 15; break; case 'P': chnum = 16; break;
+									case 'Q': chnum = 17; break; case 'R': chnum = 18; break; case 'S': chnum = 19; break; case 'T': chnum = 20; break;
+									case 'U': chnum = 21; break; case 'V': chnum = 22; break; case 'W': chnum = 23; break; case 'X': chnum = 24; break;
+									case 'Y': chnum = 25; break; case 'Z': chnum = 26; break;
 								}
-
-								curr = 0;
-								last20 = true;
+								if (!chnum)
+									pre.error("character " + std::string(1, ch) + " isn't uppercase letter");
+	
+								// Z
+								if (chnum == 26) {
+									if (!last20)
+										pre.error("bad Z positioning");
+									steps.push_back({0, 0, 0, 0, stmtref::refkind::COMPRESSED_COPY});
+									last20 = false;
+	
+								// U...Y
+								} else if (chnum >= 21 && chnum <= 25) {
+									curr = curr * 5 + chnum - 20;
+									last20 = false;
+	
+								// A...T
+								} else {
+									curr = curr * 20 + chnum - 1;
+									if (curr < mandhyps.size())
+										steps.push_back(mandhyprefs[curr]);
+	
+									else {
+										curr -= mandhyps.size();
+										if (curr < list.size())
+											steps.push_back(list[curr]);
+	
+										else {
+											curr -= list.size();
+											steps.push_back({curr, 0, 0, 0, stmtref::refkind::COMPRESSED_REPEAT});
+										}
+									}
+	
+									curr = 0;
+									last20 = true;
+								}
 							}
 						}
+						if (!ok) pre.error("empty compressed proof string");
 						if (curr) pre.error("bad compressed proof string");
 					}
-
 					for (auto const& step : steps) {
 						switch (step.kind) {
 							case stmtref::refkind::COMPRESSED_COPY:
@@ -610,7 +607,7 @@ void eval(preprocessor& pre) {
 							case stmtref::refkind::ASSERTION:
 								/* empty */ {
 									auto const& ass = stmts[step.ass_idx];
-									std::unordered_map<symid, std::vector<mathsym>> substmap;
+									substmap.clear();
 									
 									auto subst_ass_seq = [&](std::vector<mathsym> const& ass_seq) {
 										std::vector<mathsym> subst_seq;
