@@ -1,760 +1,592 @@
 #include <algorithm>
-#include <cctype>
-#include <cerrno>
-#include <cstddef>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <istream>
-#include <limits>
-#include <memory>
-#include <stdexcept>
-#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+using namespace std;
+using ull = unsigned long long;
 
-#if __cplusplus < 201402L
-	// from da interwebz
-	template<typename T, typename... Args>
-	std::unique_ptr<T> make_unique(Args&&... args) {
-		return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
-	}
-#else
-	using std::make_unique;
-#endif
+struct sym {
+	ull id;
+	enum : unsigned char {
+		IN_VARIABLE, CONSTANT, VARIABLE
+	} kind;
 
-class preprocessor {
-private:
-	struct stream_ptr {
-		std::istream *ptr;
-		std::unique_ptr<std::ifstream> file;
-		std::string filename;
-		std::size_t lc = 1, cc = 0;
-		stream_ptr() = delete;
-		stream_ptr(std::istream& p) : ptr(&p) {}
-		stream_ptr(std::unique_ptr<std::ifstream>&& f, std::string fname)
-				: ptr(f.get()), file(std::move(f)), filename(std::move(fname)) {}
-	};
-	std::deque<stream_ptr> stk;
-	std::size_t& lc() { return stk.back().lc; }
-	std::size_t& cc() { return stk.back().cc; }
-
-	bool read(std::string& str) {
-		if (stk.empty())
-			error("can't read\n");
-		auto *in = &stk.back();
-		// while (!(*(in->ptr) >> str)) {
-		bool ok = false;
-		char c;
-		enum class states {
-			BEFORE_TOK,
-			TOK,
-		} state;
-		for (;;) {
-			state = states::BEFORE_TOK;
-			bool brk = false, cleared = false;
-			while (!brk) {
-				switch (state) {
-					case states::BEFORE_TOK:
-						if (!in->ptr->get(c)) {
-							brk = true;
-							break; 
-						}
-						if (!cleared) {
-							cleared = true;
-							str.clear();
-						}
-						++cc();
-						if (!std::isspace(static_cast<unsigned char>(c)))
-							ok = true, state = states::TOK;
-						else if (c == '\n')
-							++lc(), cc() = 0;
-						break;
-
-					case states::TOK:
-						/* empty */ {
-							str += c;
-							auto d = in->ptr->peek();
-							if (d == std::char_traits<char>::eof()
-							||  std::isspace(static_cast<unsigned char>(d))
-							||  !(in->ptr->get(c))) {
-									brk = true;
-									break;
-							}
-							++cc();
-						}
-						break;
-				}
-			}
-			if (ok)
-				break;
-			if (!in->ptr->eof())
-				error("read error\n");
-			stk.pop_back();
-			if (stk.empty())
-				return false;
-			in = &stk.back();
-		}
-		return true;
-	}
-public:
-	std::size_t const& lc() const { return stk.back().lc; }
-	std::size_t const& cc() const { return stk.back().cc; }
-	template<typename T>
-	void error(T const& msg, bool fatal = true) {
-		std::string info = "[ERROR] ";
-		if (!stk.empty()) {
-			if (!stk.back().filename.empty())
-				info += "In file " + stk.back().filename + ": ";
-			info += std::to_string(lc()) + ':' + std::to_string(cc()) + ", ";
-		}
-		if (fatal)
-			throw std::runtime_error(info + msg);
-		std::cerr << info << msg << '\n';
-	}
-
-	preprocessor() = delete;
-	preprocessor(preprocessor const&) = delete;
-	preprocessor(preprocessor&&) = delete;
-	preprocessor& operator=(preprocessor const&) = delete;
-	preprocessor& operator=(preprocessor&&) = delete;
-
-	preprocessor(std::istream& in) {
-		stk.emplace_back(in);
-	}
-	preprocessor(std::string const& file) {
-		if (file == "-") {
-			stk.emplace_back(std::cin);
-			return;
-		}
-		auto fin = make_unique<std::ifstream>(file);
-		if (!*fin)
-			error(file + ": " + std::strerror(errno));
-		stk.emplace_back(std::move(fin), file);
-	}
-
-	operator bool() const {
-		return !stk.empty() && *(stk.back().ptr);
-	}
-	preprocessor& operator>>(std::string& str) {
-		while (read(str)) {
-			if (str == "$(") {
-				int cmpnd = 1;
-				while (read(str)) {
-					if (str == "$(") ++cmpnd;
-					if (str == "$)") --cmpnd;
-					if (!cmpnd)
-						break;
-				}
-	
-			} else if (str == "$[") {
-				if (!read(str))
-					error("no filename\n");
-				bool found = false;
-				for (auto const& it : stk) {
-					if (it.filename == str) {
-						found = true;
-						break;
-					}
-				}
-				if (!found) {
-					auto fin = make_unique<std::ifstream>(str);
-					if (!*fin)
-						error(str + ": " + std::strerror(errno));
-					std::string brk;
-					if (!read(brk) || brk != "$]")
-						error("expected end of file inclusion\n");
-					stk.emplace_back(std::move(fin), str);
-				} else {
-					// Silent ignore if it appeared once
-					if (!read(str) || str != "$]")
-						error("expected end of file inclusion\n");
-				}
-			} else break;
-		}
-		return *this;
-	}
+	bool operator==(sym const& rhs) const noexcept { return id == rhs.id && kind == rhs.kind; }
+	bool operator!=(sym const& rhs) const noexcept { return id != rhs.id || kind != rhs.kind; }
 };
 
-void eval(preprocessor& pre) {
-	// Math symbols (variables && constants)
-	using symid = unsigned int;
-	struct mathsym {
-		symid id;
-		enum class skind {
-			VARIABLE,
-			CONSTANT
-		} kind;
-		bool operator==(mathsym const& rhs) const {
-			return id == rhs.id && kind == rhs.kind;
-		}
-		bool operator!=(mathsym const& rhs) const {
-			return id != rhs.id || kind != rhs.kind;
-		}
-	};
-	std::unordered_map<std::string, mathsym> str2sym;
-	std::unordered_map<symid, symid> sym2type;
-	auto symc = std::numeric_limits<symid>::min();
-	// Statements (hypotheses && assertions)
-	struct stmt {
-		std::vector<mathsym> seq;
-		enum class stmtkind {
-			FLOATING,
-			ESSENTIAL,
-			AXIOM,
-			PROVEABLE
-		} kind;
-		std::unordered_set<symid> mandvars;
-		std::vector<stmt> mandhyps;
-		std::unordered_map<symid, std::unordered_set<symid>> manddisjs;
-	};
-	struct stmtref {
-		std::size_t compr_idx;         // COMPRESSED REPEAT
-		std::size_t stk_idx, hyps_idx; // HYPOTHESIS
-		std::size_t ass_idx;           // ASSERTION
-		enum class refkind {
-			ASSERTION,
-			HYPOTHESIS,
-			COMPRESSED_COPY,
-			COMPRESSED_REPEAT
-		} kind;
-	};
-	using label = unsigned int;
-	std::unordered_map<std::string, label> str2label;
-	std::unordered_map<label, stmtref> label2ref;
-	std::vector<stmt> stmts;
-	auto labc = std::numeric_limits<label>::min();
+struct stmt {
+	vector<sym> syms;
+	// For essential hypotheses only
+	unordered_set<ull> vars;
 
-	// Blocks
-	struct block {
-		// Variables
-		std::unordered_set<symid> vars;
-		// Disjoint variable conditions
-		std::unordered_map<symid, std::unordered_set<symid>> disjs;
-		// Floating && essential hypothesis
-		std::vector<stmt> hyps;
+	// For assertions only
+	unordered_set<ull> mandvars;
+	vector<stmt*> mandhyps;
+	vector<pair<ull, ull>> manddisjs;
 
+	enum : unsigned char {
+		ESSENTIAL_HYP, FLOATING_HYP, ASSERTION, IN_ESSENTIAL_HYP, IN_FLOATING_HYP
+	} kind;
+};
 
-		std::unordered_set<label> labels_to_del;
+struct stkclean {
+	vector<reference_wrapper<sym>> syms;
+	vector<reference_wrapper<stmt>> hyps;
+	vector<pair<ull, ull>> disjs;
+};
+
+unordered_map<string, sym> str2sym;
+unordered_map<string, stmt> str2stmt;
+unordered_map<ull, unordered_map<ull, ull>> disjs;
+unordered_map<ull, pair<ull, bool>> symid2type;
+vector<stkclean> cleanup(1, stkclean{});
+
+bool verify(istream& in, string const& filename = {}, bool reset = false) {
+	ull tokcnt = 0, symcnt = 0;
+	string tok;
+	bool ret = true;
+	auto error = [&](string const& str) {
+		cerr << "[ERROR @ token #" << tokcnt;
+		if (!filename.empty())
+			cerr << ", in file " << filename;
+		cerr << "] " << str << '\n';
+		return false;
 	};
-	std::vector<block> stk(1);
-	
-	std::string str;
-	while (pre >> str) {
-		//
-		// Scoping statement
-		//
-		if (str == "${") {
-			stk.emplace_back();
-		} else if (str == "$}") {
-			if (stk.size() == 1)
-				pre.error("can't close block here");
-			for (auto const& l : stk.back().labels_to_del)
-				label2ref.erase(l);
-			stk.pop_back();
-
-		//
-		// Constant math symbol
-		//
-		} else if (str == "$c") {
-			if (stk.size() != 1)
-				pre.error("constant statement outside outermost block");
-			while (pre >> str) {
-				if (str == "$.")
-					break;
-				auto fnd = str2sym.find(str);
-				if (fnd == str2sym.end())
-					str2sym[std::move(str)] = {symc++, mathsym::skind::CONSTANT};
-				else
-					pre.error("symbol " + str + " already exists");
+	auto info = [&](string const& str) {
+		cout << "[INFO] " << str << '\n';
+	};
+	auto warn = [&](string const& str) {
+		cerr << "[WARN] " << str << '\n';
+	};
+	auto rdtok = [&]() {
+		bool cmt = false;
+		while (++tokcnt, in >> tok) {
+			if (tok == "$(") {
+				cmt = true;
+				while (++tokcnt, in >> tok)
+					if (tok == "$)") {
+						cmt = false;
+						break;
+					}
+				if (cmt)
+					return error("Unclosed comment");
+				continue;
 			}
+			if (!all_of(tok.begin(), tok.end(), [](unsigned char ch) { return isprint(ch); }))
+				return error("Token not printable");
+			return true;
+		}
+		return false;
+	};
 
-		//
-		// Variable math symbol
-		//
-		} else if (str == "$v") {
-			while (pre >> str) {
-				if (str == "$.")
+	if (reset) {
+		str2sym.clear();
+		str2stmt.clear();
+		disjs.clear();
+		symid2type.clear();
+		cleanup = vector<stkclean>(1, stkclean{});
+	}
+
+	while (rdtok()) {
+		// File inclusion
+		if (tok == "$[") {
+			if (!rdtok())
+				return error("Expected filename");
+			auto filename = std::move(tok);
+			if (!all_of(filename.begin(), filename.end(), [](char ch) { return ch != '$'; }))
+				return error("Filename contains $");
+			ifstream fin(filename);
+			if (!fin)
+				return error("Could not open file " + filename);
+			if (!rdtok() || tok != "$]")
+				return error("Expected end of file inclusion");
+			ret &= verify(fin, filename);
+
+		// Block
+		} else if (tok == "${")
+			cleanup.emplace_back();
+		else if (tok == "$}") {
+			if (cleanup.size() <= 1)
+				return error("No block to close");
+
+			for (auto& sym : cleanup.back().syms)
+				sym.get().kind = sym::IN_VARIABLE;
+			
+			for (auto const& stmt : cleanup.back().hyps) {
+				auto& st = stmt.get();
+				if (st.kind == stmt::FLOATING_HYP) {
+					st.kind = stmt::IN_FLOATING_HYP;
+					symid2type.at(st.syms[1].id).second = false;
+				} else stmt.get().kind = stmt::IN_ESSENTIAL_HYP;
+			}
+			for (auto const& disj : cleanup.back().disjs) {
+				auto& set = disjs.at(disj.first);
+				if (!--set.at(disj.second))
+					set.erase(disj.second);
+				if (set.empty())
+					disjs.erase(disj.first);
+			}
+			cleanup.pop_back();
+
+		// Constants
+		} else if (tok == "$c") {
+			for (;;) {
+				if (!rdtok())
+					return error("Expected end of constant statement");
+				if (tok == "$.")
 					break;
-				auto fnd = str2sym.find(str);
-				if (fnd == str2sym.end())
-					str2sym[std::move(str)] = {symc++, mathsym::skind::VARIABLE};
-				else {
-					if (fnd->second.kind == mathsym::skind::CONSTANT)
-						pre.error("symbol " + str + " already exists as a constant");
-					// == VARIABLE
-					for (auto const& it : stk)
-						if (it.vars.find(fnd->second.id) != it.vars.end())
-							pre.error("symbol " + str + " is already a variable");
-					stk.back().vars.emplace(fnd->second.id);
+				if (!all_of(tok.begin(), tok.end(), [](char ch) { return ch != '$'; }))
+					return error("Constant symbol " + tok + " contains $");
+				auto fnd = str2sym.find(tok);
+				if (fnd != str2sym.end())
+					return error("Can't define constant " + tok + ", symbol already exists");
+				auto fnd2 = str2stmt.find(tok);
+				if (fnd2 != str2stmt.end())
+					return error("Can't define constant " + tok + ", label already exists");
+				str2sym.emplace(tok, sym{symcnt++, sym::CONSTANT});
+			}
+		// Variables
+		} else if (tok == "$v") {
+			for (;;) {
+				if (!rdtok())
+					return error("Expected end of variable statement");
+				if (tok == "$.")
+					break;
+				if (!all_of(tok.begin(), tok.end(), [](char ch) { return ch != '$'; }))
+					return error("Variable symbol " + tok + " contains $");
+				auto fnd = str2sym.find(tok);
+				if (fnd == str2sym.end()) {
+					auto fnd2 = str2stmt.find(tok);
+					if (fnd2 != str2stmt.end())
+						return error("Can't define variable " + tok + ", label already exists");
+					cleanup.back().syms.emplace_back(str2sym.emplace(tok, sym{symcnt++, sym::VARIABLE}).first->second);
+				} else {
+					if (fnd->second.kind == sym::VARIABLE || fnd->second.kind == sym::CONSTANT)
+						return error("Can't define variable " + tok + ", symbol already exists");
+					auto fnd2 = str2stmt.find(tok);
+					if (fnd2 != str2stmt.end())
+						return error("Can't define variable " + tok + ", label already exists");
+					fnd->second.kind = sym::VARIABLE;
+					cleanup.back().syms.emplace_back(fnd->second);
 				}
 			}
-		
-		//
-		// Disjoint variable condition
-		//
-		} else if (str == "$d") {
-			std::unordered_set<symid> vars;
-			while (pre >> str) {
-				if (str == "$.")
+
+		// Disjoint variable conditions
+		} else if (tok == "$d") {
+			unordered_set<ull> varids;
+			for (;;) {
+				if (!rdtok())
+					return error("Expected end of disjoint variable statement");
+				if (tok == "$.")
 					break;
-				auto fnd = str2sym.find(str);
-				if (fnd == str2sym.end())
-					pre.error("symbol " + str + " not found");
-				if (fnd->second.kind != mathsym::skind::VARIABLE)
-					pre.error("symbol " + str + " is not a variable, but a constant");
-				vars.emplace(fnd->second.id);
+				auto fnd = str2sym.find(tok);
+				if (fnd == str2sym.end() || fnd->second.kind != sym::VARIABLE)
+					return error("No such active variable symbol " + tok);
+				if (varids.find(fnd->second.id) != varids.end())
+					return error("Variable " + tok + " already in the disjoint variable condition");
+				varids.insert(fnd->second.id);
 			}
-			for (auto it = vars.begin(); it != vars.end(); ++it)
-				for (auto jt = std::next(it); jt != vars.end(); ++jt)
-					stk.back().disjs[std::min(*it, *jt)].insert(std::max(*it, *jt));
+			for (auto it = varids.begin(); it != varids.end(); ++it)
+				for (auto jt = next(it); jt != varids.end(); ++jt) {
+					auto x = min(*it, *jt), y = max(*it, *jt);
+					disjs[x][y]++;
+					cleanup.back().disjs.emplace_back(x, y);
+				}
 		
 		} else {
-			std::string labstr = std::move(str), typestr;
-			/*
-			// check label sanity
-			for (auto const& ch : labstr)
-				if (!std::isalnum(static_cast<unsigned char>(ch))
-				&&  ch != '.' && ch != '-' && ch != '_')
-					pre.error(labstr + " is not a valid label");
-			*/
-			if (str2label.find(labstr) != str2label.end())
-				pre.error("label " + labstr + " was aleady used once");
-			str2label[labstr] = labc;
+			string labstr = move(tok), stmtkind;
+			ull typecode;
+			if (str2stmt.find(labstr) != str2stmt.end())
+				return error("Can't define label " + labstr + ", it already exists");
+			if (str2sym.find(labstr) != str2sym.end())
+				return error("Can't define label " + labstr + ", symbol already exists");
+			if (!all_of(labstr.begin(), labstr.end(), [](unsigned char ch) { return isalnum(ch) || ch == '.' || ch == '-' || ch == '_'; }))
+				return error("Label " + labstr + " not sane");
+			
+			if (!rdtok())
+				return error("Expected statement kind after label " + labstr);
+			stmtkind = std::move(tok);
 
-			pre >> str >> typestr;
-			auto fnd = str2sym.find(typestr);
+			if (!rdtok())
+				return error("Expected typecode");
+			auto fnd = str2sym.find(tok);
 			if (fnd == str2sym.end())
-				pre.error("symbol " + typestr + " not found");
-			if (fnd->second.kind != mathsym::skind::CONSTANT)
-				pre.error("symbol " + typestr + " is not a constant (typecode), but a variable");
-			auto const& typecode = fnd->second;
-		
-			//
+				return error("No such active constant (for use as typecode) " + tok);
+			typecode = fnd->second.id;
+
 			// Floating hypothesis
-			//
-			if (str == "$f") {
-				std::string var;
-				pre >> var;
+			if (stmtkind == "$f") {
+				if (!rdtok())
+					return error("Expected active variable symbol in floating hypothesis");
+				string var = std::move(tok);
 				auto fnd = str2sym.find(var);
-				if (fnd == str2sym.end())
-					pre.error("symbol " + var + " not found");
-				if (fnd->second.kind != mathsym::skind::VARIABLE)
-					pre.error("symbol " + var + " is not a variable, but a constant");
-				auto const& varsym = fnd->second;
+				if (fnd == str2sym.end() || fnd->second.kind != sym::VARIABLE)
+					return error("No such active variable symbol " + tok);
+
+				if (!rdtok() || tok != "$.")
+					return error("Expected end of floating hypothesis");
+
+				auto fnd2 = symid2type.find(fnd->second.id);
+				if (fnd2 != symid2type.end()) {
+					if (fnd2->second.second)
+						return error("A floating hypothesis for " + var + " is already active");
+					if (fnd2->second.first != typecode)
+						return error("Floating hypothesis for " + var + " contradicts existing typecode");
+					fnd2->second.second = true;
+				} else symid2type.emplace(fnd->second.id, make_pair(typecode, true));
 				
-				auto fnd2 = sym2type.find(varsym.id);
-				if (fnd2 != sym2type.end() && fnd2->second != typecode.id)
-					pre.error("type " + typestr + " is inconsistent with earlier floating hypotheses");
+				cleanup.back().hyps.emplace_back(str2stmt.emplace(labstr, stmt{
+					{{typecode, sym::CONSTANT}, fnd->second}, {}, {}, {}, {}, stmt::FLOATING_HYP
+				}).first->second);
 
-				pre >> str;
-				if (str != "$.")
-					pre.error("expected end of floating hypothesis");
-
-				std::vector<mathsym> vec = { typecode, varsym };
-				stk.back().hyps.push_back({
-					std::move(vec),          // .seq
-					stmt::stmtkind::FLOATING // .kind
-				});
-				label2ref[labc] = {
-					0,                           // .compr_idx
-					stk.size() - 1,              // .stk_idx
-					stk.back().hyps.size() - 1,  // .hyps_idx
-					0,                           // .ass_idx
-					stmtref::refkind::HYPOTHESIS // .kind
-				};
-				stk.back().labels_to_del.insert(labc);
-				sym2type[varsym.id] = typecode.id;
-	
-			//
 			// Essential hypothesis
-			//
-			} else if (str == "$e") {
-				std::string var;
-				std::vector<mathsym> vec = { typecode };
-				while (pre >> var) {
-					if (var == "$.")
+			} else if (stmtkind == "$e") {
+				vector<sym> seq = {{typecode, sym::CONSTANT}};
+				unordered_set<ull> vars;
+				for (;;) {
+					if (!rdtok())
+						return error("Expected end of essential hypothesis");
+					if (tok == "$.")
 						break;
-					auto fnd = str2sym.find(var);
+
+					auto fnd = str2sym.find(tok);
 					if (fnd == str2sym.end())
-						pre.error("symbol " + var + " not found");
-					vec.push_back(fnd->second);
+						return error("No such symbol " + tok);
+				
+					if (fnd->second.kind == sym::IN_VARIABLE)
+						return error("Variable symbol " + tok + " is inactive");
+					else if (fnd->second.kind == sym::VARIABLE) {
+						auto fnd2 = symid2type.find(fnd->second.id);
+						if (fnd2 == symid2type.end() || !fnd2->second.second)
+							return error("Variable " + tok + " in essential hypothesis " + labstr + " has no active floating hypothesis (typecode)");
+						vars.insert(fnd->second.id);
+					}
+					seq.push_back(fnd->second);
 				}
-				stk.back().hyps.push_back({
-					std::move(vec),            // .seq
-					stmt::stmtkind::ESSENTIAL  // .kind
-				});
-				label2ref[labc] = {
-					0,                           // .compr_idx
-					stk.size() - 1,              // .stk_idx
-					stk.back().hyps.size() - 1,  // .hyps_idx
-					0,                           // .ass_idx
-					stmtref::refkind::HYPOTHESIS // .kind
-				};
-				stk.back().labels_to_del.insert(labc);
+				cleanup.back().hyps.emplace_back(str2stmt.emplace(labstr, stmt{
+					std::move(seq), std::move(vars), {}, {}, {}, stmt::ESSENTIAL_HYP
+				}).first->second);
 			
 			} else {
-				std::string stopstr, var;
-				if (str == "$a")
-					stopstr = "$.";
-				else if (str == "$p")
-					stopstr = "$=";
-				else pre.error("invalid statement " + str);
-				std::vector<mathsym> seq = { typecode };
-				while (pre >> var) {
-					if (var == stopstr)
+				bool p = (stmtkind == "$p"), a = (stmtkind == "$a");
+				if (!p && !a)
+					return error("Bad statement kind " + stmtkind);
+
+				/* (1) */ unordered_set<ull> mandvars;
+				/* (2) */ vector<stmt*> mandhyps;
+				/* (3) */ vector<pair<ull, ull>> manddisjs;
+
+				vector<sym> seq = {{typecode, sym::CONSTANT}};
+				for (;;) {
+					if (!rdtok())
+						return error("Expected end of assertion symbol sequence");
+					if ((p && tok == "$=") || (a && tok == "$."))
 						break;
-					auto fnd = str2sym.find(var);
+					auto fnd = str2sym.find(tok);
 					if (fnd == str2sym.end())
-						pre.error("symbol " + var + " not found");
+						return error("No such symbol " + tok);
+
+					if (fnd->second.kind == sym::VARIABLE) {
+						auto fnd2 = symid2type.find(fnd->second.id);
+						if (fnd2 == symid2type.end() || !fnd2->second.second)
+							return error("Variable " + tok + " in assertion " + labstr + " has no active floating hypothesis (typecode)");
+						/* (1): 1/2 */ mandvars.insert(fnd->second.id);
+					
+					} else if (fnd->second.kind != sym::CONSTANT)
+						return error("Symbol " + tok + " in assertion " + labstr + " is not an active variable or constant");
+
 					seq.push_back(fnd->second);
 				}
 
-				// 1) mandatory variables == variables appearing in the sequence of
-				// math symbols together with the variables appearing in all
-				// essential hypotheses thus far
-				std::unordered_set<symid> mandvars;
-
-				// 2) mandatory hypotheses == essential hypotheses together with
-				// all floating hypotheses containing mandatory variables
-				std::vector<stmt> mandhyps;
-				std::vector<stmtref> mandhyprefs;
-
-				// 3) mandatory disjoint variable condition == disjoint variable
-				// condition where both variables are mandatory variables
-				std::unordered_map<symid, std::unordered_set<symid>> manddisjs;
-
-				for (auto const& w : seq)
-					if (w.kind == mathsym::skind::VARIABLE)
-						/* 1) */ mandvars.insert(w.id);
-				for (auto const& it : stk)
+				for (auto const& it : cleanup)
 					for (auto const& hyp : it.hyps)
-						if (hyp.kind == stmt::stmtkind::ESSENTIAL)
-							for (auto const& w : hyp.seq)
-								if (w.kind == mathsym::skind::VARIABLE)
-									/* 1) */ mandvars.insert(w.id);
+						if (hyp.get().kind == stmt::ESSENTIAL_HYP)
+							/* (1): 2/2 */ mandvars.insert(hyp.get().vars.begin(), hyp.get().vars.end());
 
-				//std::vector<stmt> mande, mandf;
-				for (std::size_t i = 0; i < stk.size(); ++i) {
-					for (std::size_t j = 0; j < stk[i].hyps.size(); ++j) {
-						if (stk[i].hyps[j].kind == stmt::stmtkind::ESSENTIAL
-						||  mandvars.find(stk[i].hyps[j].seq[1].id) != mandvars.end()) {
-							/* 2) */ mandhyps.push_back(stk[i].hyps[j]);
-							/* 2) */ mandhyprefs.push_back({0, i, j, 0, stmtref::refkind::HYPOTHESIS});
-						}
-					}
-					for (auto const& dc : stk[i].disjs)
-						if (mandvars.find(dc.first) != mandvars.end())
-							for (auto const& var2 : dc.second)
-								if (mandvars.find(var2) != mandvars.end())
-									/* 3) */ manddisjs[std::min(dc.first, var2)].insert(std::max(dc.first, var2));
+				for (auto const& it : cleanup) {
+					for (auto const& hyp : it.hyps)
+						if ((hyp.get().kind == stmt::ESSENTIAL_HYP)
+						||  (hyp.get().kind == stmt::FLOATING_HYP && mandvars.find(hyp.get().syms[1].id) != mandvars.end()))
+							/* (2): 1/2, 2/2 */ mandhyps.push_back(&hyp.get());
+					for (auto const& disj : it.disjs)
+						if (mandvars.find(disj.first) != mandvars.end() && mandvars.find(disj.second) != mandvars.end())
+							/* (3): 1/1 */ manddisjs.emplace_back(disj);
 				}
-				//for (auto& it : mandf) mandhyps.push_back(std::move(it));
-				//for (auto& it : mande) mandhyps.push_back(std::move(it));
-
-				// the book is very stupid and unclear about this:
-				// if you wanna use a $p or $a statement, it MUST have a frame
-				// that means in this part of the code:
-				//
-				// 1) each variable in mandvars must have an active $f
-				// 2) no two $f statements contain the same variable
-				// 3) the $f of any variable must be before its $e
-				std::unordered_set<symid> floats;
-				for (auto const& hyp : mandhyps) {
-					if (hyp.kind == stmt::stmtkind::FLOATING) {
-						auto varid = hyp.seq[1].id;
-						if (floats.find(varid) != floats.end())
-							/* 2) */ pre.error("two floating hypotheses in the associated "
-							                   "frame share the same variable");
-						floats.insert(varid);
-					
-					} else if (hyp.kind == stmt::stmtkind::ESSENTIAL) {
-						for (auto const& sym : hyp.seq)
-							if (sym.kind == mathsym::skind::VARIABLE && floats.find(sym.id) == floats.end())
-								/* 3) */ pre.error("essential hypothesis in the associated "
-								                   "frame doesn't have a floating hypothesis before it");
-					}
-				}
-				if (floats.size() != mandvars.size())
-					/* 1) */ pre.error("not every mandatory variable has an associated floating hypothesis");
 
 				bool proved = false;
-				
-				//
 				// Axiomatic assertion
-				//
-				if (str == "$a") {
+				if (stmtkind == "$a")
 					proved = true;
 
-				//
-				// Proveable assertion
-				//
-				} else if (str == "$p") {
-					std::vector<stmtref> steps;
-					std::vector<std::vector<mathsym>> proof_stk, copy_stk;
-					std::unordered_map<symid, std::vector<mathsym>> substmap;
-					bool compressed = false, notproof = false;
-
-					while (pre >> var) {
-						if (var == "?" && !notproof) {
-							notproof = true;
-							pre >> var;
-						}
-						if (var == "$.") {
-							if (notproof)
-								goto _notproof_label;
-							if (compressed)
-								pre.error("premature end of compressed proof");
-							break;
-						}
-						if (!compressed && var == "(") {
-							compressed = true;
-							continue;
-						}
-						if (compressed && var == ")")
-							break;
-						auto fnd = str2label.find(var);
-						if (fnd == str2label.end())
-							pre.error("label " + var + " not found");
-						auto fnd2 = label2ref.find(fnd->second);
-						if (fnd2 == label2ref.end())
-							pre.error("label " + var + " not valid anymore");
-						steps.emplace_back(fnd2->second);
+				// Provable assertion
+				else {
+					struct step {
+						enum : unsigned char {
+							STATEMENT, COMPRESS_COPY, COMPRESS_USE
+						} type;
+						ull compr_idx;
+						stmt *ptr;
 					};
+					vector<step> steps;
+					vector<vector<sym>> proof_stk, copy_stk;
+					unordered_map<ull, vector<sym>> substmap;
+					bool compressed = false, rightafter1st = true, noproof = false;
+					if (!rdtok())
+						return error("Expected end of proof in provable assertion " + labstr);
+					if (tok == "(")
+						compressed = true;
 
-					if (compressed) {
-						std::vector<stmtref> list = std::move(steps);
-						steps.clear();
-						std::size_t curr = 0;
-						bool last20 = false, ok = false;
-						while (pre >> var) {
-							if (var == "$.")
+					while (true) {
+						if ((!rightafter1st || compressed) && !rdtok()) 
+							return error("Expected end of proof in provable assertion " + labstr);
+						if (rightafter1st) rightafter1st = false;
+						if (compressed) {
+							if (tok == ")")
 								break;
-							ok = true;
-							for (auto const& ch : var) {
-								// to work in non-ascii environments too i won't assume an ordering of the letters
-								int chnum = 0;
-								switch (ch) {
-									case 'A': chnum = 1; break; case 'B': chnum = 2; break; case 'C': chnum = 3; break; case 'D': chnum = 4; break;
-									case 'E': chnum = 5; break; case 'F': chnum = 6; break; case 'G': chnum = 7; break; case 'H': chnum = 8; break;
-									case 'I': chnum = 9; break; case 'J': chnum = 10; break; case 'K': chnum = 11; break; case 'L': chnum = 12; break;
-									case 'M': chnum = 13; break; case 'N': chnum = 14; break; case 'O': chnum = 15; break; case 'P': chnum = 16; break;
-									case 'Q': chnum = 17; break; case 'R': chnum = 18; break; case 'S': chnum = 19; break; case 'T': chnum = 20; break;
-									case 'U': chnum = 21; break; case 'V': chnum = 22; break; case 'W': chnum = 23; break; case 'X': chnum = 24; break;
-									case 'Y': chnum = 25; break; case 'Z': chnum = 26; break;
-								}
-								if (!chnum)
-									pre.error("character " + std::string(1, ch) + " isn't uppercase letter");
-	
-								// Z
-								if (chnum == 26) {
-									if (!last20)
-										pre.error("bad Z positioning");
-									steps.push_back({0, 0, 0, 0, stmtref::refkind::COMPRESSED_COPY});
-									last20 = false;
-	
-								// U...Y
-								} else if (chnum >= 21 && chnum <= 25) {
-									curr = curr * 5 + chnum - 20;
-									last20 = false;
-	
-								// A...T
-								} else {
-									curr = curr * 20 + chnum - 1;
-									if (curr < mandhyps.size())
-										steps.push_back(mandhyprefs[curr]);
-	
-									else {
-										curr -= mandhyps.size();
-										if (curr < list.size())
-											steps.push_back(list[curr]);
-	
-										else {
-											curr -= list.size();
-											steps.push_back({curr, 0, 0, 0, stmtref::refkind::COMPRESSED_REPEAT});
-										}
+						} else {
+							if (tok == "$.")
+								break;
+							if (tok == "?")
+								noproof = true;
+						}
+						if (tok != "?") {
+							auto fnd = str2stmt.find(tok);
+							if (fnd == str2stmt.end() || fnd->second.kind == stmt::IN_ESSENTIAL_HYP || fnd->second.kind == stmt::IN_FLOATING_HYP)
+								return error("No such active label " + tok + " in provable assertion " + labstr);
+							steps.push_back(step{step::STATEMENT, 0, &fnd->second});
+						}
+					}
+					if (compressed) {
+						auto stmts = std::move(steps);
+						steps.clear();
+						
+						bool in_ws = true, ok = false, last20 = false;
+						char c;
+						ull charcnt = 0, curr = 0;
+						for (;;) {
+							if (++charcnt, !in.get(c))
+								return error("Expected end of proof in provable assertion " + labstr);
+							if (in_ws) {
+								if (!isspace(c)) {
+									in_ws = false;
+									++tokcnt;
+									if (c == '$') {
+										if (!in.get(c) || c != '.')
+											return error("(char #" + to_string(charcnt) + ") Expected . after $ in provable assertion " + labstr);
+										if (in.get(c) && !isspace(c))
+											return error("(char #" + to_string(charcnt) + ") Unexpected character after . in provable assertion " + labstr);
+										break;
 									}
-	
-									curr = 0;
-									last20 = true;
+								}
+							}
+							if (!in_ws) {
+								if (isspace(c))
+									in_ws = true;
+
+								else {
+									if (!isupper(c))
+										return error("(char #" + to_string(charcnt) + ") Expected uppercase character in compressed proof string in provable assertion " + labstr);
+								
+									ok = true;
+									// this time i'll assume ascii again because metamath actually requires it + less effort
+									if (c == 'Z') {
+										if (!last20)
+											return error("Bad Z positioning");
+										steps.push_back(step{step::COMPRESS_COPY, 0, nullptr});
+										last20 = false;
+									
+									} else if (c >= 'U' && c <= 'Y') {
+										curr = curr * 5 + c - 'U' + 1;
+										last20 = false;
+									
+									// c >= 'A' && c <= 'T'
+									} else {
+										curr = curr * 20 + c - 'A';
+										if (curr < mandhyps.size())
+											steps.push_back(step{step::STATEMENT, 0, mandhyps[curr]});
+										else {
+											curr -= mandhyps.size();
+											if (curr < stmts.size())
+												steps.push_back(stmts[curr]);
+											else {
+												curr -= stmts.size();
+												steps.push_back(step{step::COMPRESS_USE, curr, nullptr});
+											}
+										}
+										curr = 0;
+										last20 = true;
+									}
 								}
 							}
 						}
-						if (!ok) pre.error("empty compressed proof string");
-						if (curr) pre.error("bad compressed proof string");
-					}
+						if (!ok)
+							return error("Empty compressed proof string in provable assertion " + labstr);
+						if (curr)
+							return error("Bad compressed proof string in provable assertion" + labstr);
+					} else if (noproof)
+						goto noproof_label;
 					for (auto const& step : steps) {
-						switch (step.kind) {
-							case stmtref::refkind::COMPRESSED_COPY:
+						switch (step.type) {
+							case step::COMPRESS_COPY:
 								if (proof_stk.empty())
-									pre.error("empty proof stack when trying to copy");
+									return error("Empty proof stack when trying to copy in provable assertion " + labstr);
 								copy_stk.push_back(proof_stk.back());
 								break;
-							case stmtref::refkind::COMPRESSED_REPEAT:
+							case step::COMPRESS_USE:
 								if (step.compr_idx >= copy_stk.size())
-									pre.error("can't repeat that compressed index");
+									return error("Can't repeat compressed index #" + to_string(step.compr_idx) + " in provable assertion " + labstr);
 								proof_stk.push_back(copy_stk[step.compr_idx]);
 								break;
 
-							case stmtref::refkind::HYPOTHESIS:
-								proof_stk.push_back(stk[step.stk_idx].hyps[step.hyps_idx].seq);
-								break;
+							case step::STATEMENT:
+								switch (step.ptr->kind) {
+									case stmt::FLOATING_HYP: /* FALLTHROUGH */
+									case stmt::IN_FLOATING_HYP: /* FALLTHROUGH */
+									case stmt::ESSENTIAL_HYP: /* FALLTHROUGH */
+									case stmt::IN_ESSENTIAL_HYP:
+										proof_stk.push_back(step.ptr->syms);
+										break;
 
-							case stmtref::refkind::ASSERTION:
-								/* empty */ {
-									auto const& ass = stmts[step.ass_idx];
-									substmap.clear();
-									
-									auto subst_ass_seq = [&](std::vector<mathsym> const& ass_seq) {
-										std::vector<mathsym> subst_seq;
-										for (auto const& it : ass_seq) {
-											auto fnd = substmap.find(it.id);
-											if (fnd != substmap.end())
-												for (auto const& jt : fnd->second)
-													subst_seq.push_back(jt);
-											else subst_seq.push_back(it);
-										}
-										return subst_seq;
-									};
+									case stmt::ASSERTION:
+										substmap.clear();
 
-									// step 1: check unification && build substitution map
-									if (ass.mandhyps.size() > proof_stk.size())
-										pre.error("stack underflow");
-									
-									std::size_t base = proof_stk.size() - ass.mandhyps.size();
-									for (std::size_t i = 0; i < ass.mandhyps.size(); ++i) {
-										auto const& hyp = ass.mandhyps[i];
-
-										if (hyp.kind == stmt::stmtkind::FLOATING) {
-											if (hyp.seq[0] != proof_stk[base + i][0])
-												pre.error("couldn't unify (typecodes don't match)");
-
-											auto& map = substmap[hyp.seq[1].id];
-											map = proof_stk[base + i];
-											map.erase(map.begin());
-
-										} else if (hyp.kind == stmt::stmtkind::ESSENTIAL
-										       &&  subst_ass_seq(hyp.seq) != proof_stk[base + i])
-											pre.error("couldn't unify");
-									}
-
-									// step 2: now get rid of the $e and $f
-									proof_stk.resize(base);
-								
-									// step 3: verify disjoint variable conditions
-									//
-									// 1) if two variables in the substitution map exist in a mandatory
-									// hypothesis' mandatory disjoint variable statement, their
-									// corresponding sequences that they map to should have no variables
-									// in common
-									//
-									// 2) each pair (a, b) of variables from the two sequences must
-									// exist in an active disjoint variable statement of the proof
-									// (i. e. any $d a b $. before our $p)
-									for (auto const& v1 : ass.manddisjs) {
-										for (auto const& v2 : v1.second) {
-											auto f1 = substmap.find(v1.first);
-											auto f2 = substmap.find(v2);
-
-											for (auto const& x : f1->second) {
-												if (x.kind != mathsym::skind::VARIABLE)
-													continue;
-												for (auto const& y : f2->second) {
-													if (y.kind != mathsym::skind::VARIABLE)
-														continue;
-
-													if (x == y)
-														/* 1) */ pre.error("disjoint variable condition violation");
-
-													auto X = std::min(x.id, y.id);
-													auto Y = std::max(x.id, y.id);
-
-													bool ok = false;
-													for (auto const& it : stk) {
-														auto fnd1 = it.disjs.find(X);
-														if (fnd1 != it.disjs.end())
-															if (fnd1->second.find(Y) != fnd1->second.end())
-																ok = true;
+										/* empty */ {
+											auto subst_seq = [&](vector<sym> const& seq) {
+												vector<sym> ret;
+												for (auto const& it : seq)
+													if (it.kind == sym::CONSTANT)
+														ret.push_back(it);
+													else {
+														auto fnd = substmap.find(it.id);
+														if (fnd != substmap.end())
+															ret.insert(ret.end(), fnd->second.begin(), fnd->second.end());
 													}
-													if (!ok)
-														/* 2) */ pre.error("disjoint variable condition violation");
+												return ret;
+											};
+
+											// STEP 1: check unification and build substmap
+											if (step.ptr->mandhyps.size() > proof_stk.size())
+												return error("Stack underflow in provable assertion " + labstr);
+											auto const& mandhyps = step.ptr->mandhyps;
+											size_t base = proof_stk.size() - mandhyps.size();
+											for (size_t i = 0; i < mandhyps.size(); ++i) {
+												if (mandhyps[i]->kind == stmt::FLOATING_HYP || mandhyps[i]->kind == stmt::IN_FLOATING_HYP) {
+													if (mandhyps[i]->syms[0] != proof_stk[base + i][0])
+														return error("Couldn't unify (typecodes don't match) in provable assertion " + labstr);
+													
+													auto& map = substmap[mandhyps[i]->syms[1].id];
+													map = proof_stk[base + i];
+													map.erase(map.begin());
+
+												} else if ((mandhyps[i]->kind == stmt::ESSENTIAL_HYP || mandhyps[i]->kind == stmt::IN_ESSENTIAL_HYP)
+												       &&   subst_seq(mandhyps[i]->syms) != proof_stk[base + i])
+													return error("Couldn't unify in provable assertion " + labstr);
+											}
+
+											// STEP 2: get rid of $e and $f
+											proof_stk.resize(base);
+
+											// STEP 3: verify disjoint variable conditions
+											for (auto const& it : step.ptr->manddisjs) {
+												auto x = it.first, y = it.second;
+												auto f1 = substmap.find(x), f2 = substmap.find(y);
+												if (f1 == substmap.end() || f2 == substmap.end())
+													return error("UNREACHABLE!");
+												for (auto const& a : f1->second) {
+													if (a.kind != sym::VARIABLE)
+														continue;
+													for (auto const& b : f2->second) {
+														if (b.kind != sym::VARIABLE)
+															continue;
+														if (a.id == b.id)
+															return error("Disjoint variable condition violation (two same variables) in provable assertion " + labstr);
+														
+														auto A = min(a.id, b.id), B = max(a.id, b.id);
+														bool ok = false;
+														auto fnd2 = disjs.find(A);
+														if (fnd2 != disjs.end()) {
+															auto fnd3 = fnd2->second.find(B);
+															if (fnd3 != fnd2->second.end())
+																ok = true;
+														}
+														if (!ok)
+															return error("Disjoint variable condition violation (two variables mapped in the substitution map by variables "
+															             "in a disjoint variable condition aren't in a disjoint variable condition in provable assertion "
+															             + labstr);
+													}
 												}
 											}
-										}
-									}
 
-									// step 4: push the substituted assertion sequence back onto the stack
-									proof_stk.push_back(subst_ass_seq(ass.seq));
+											// STEP 4: push the substitued assertion sequence back onto the stack
+											proof_stk.push_back(subst_seq(step.ptr->syms));
+										}
+										break;
 								}
 								break;
 						}
 					}
 					if (proof_stk.size() != 1)
-						pre.error("proof of " + labstr + " should end with one element on the stack");
-					if (proof_stk[0] != seq)
-						pre.error("proof of " + labstr + " doesn't prove the correct statement");
+						return error("Proof of assertion " + labstr + " should end with one element on the stack");
+					if (proof_stk.front() != seq)
+						return error("Proof of assertion " + labstr + " doesn't prove the correct statement");
 
-					std::cout << "[INFO] theorem " << labstr << " is OK!\n";
-_notproof_label:
-					if (notproof)
-						std::cerr << "[WARN] theorem " << labstr << " is not yet proved!\n";
+					info("Theorem " + labstr + " OK!");
+					noproof_label:
+						if (noproof)
+							warn("Theorem " + labstr + " assumed to be true!");
 					proved = true;
-				
-				} else pre.error("bad statement " + str);
-
-				if (!proved) {
-					pre.error("theorem " + labstr + " not proved!");
-
-				} else {
-					stmts.push_back({
-						std::move(seq),                  // .seq
-						str == "$a"
-							? stmt::stmtkind::AXIOM
-							: stmt::stmtkind::PROVEABLE, // .kind
-						std::move(mandvars),             // .mandvars
-						std::move(mandhyps),             // .mandhyps
-						std::move(manddisjs)             // .manddisjs
-					});
-					label2ref[labc] = {
-						0,                           // .compr_idx
-						0,                           // .stk_idx
-						0,                           // .hyps_idx
-						stmts.size() - 1,            // .ass_idx
-						stmtref::refkind::ASSERTION  // .kind
-					};
 				}
+
+				if (!proved)
+					return error("Theorem " + labstr + " not proved!");
+				else str2stmt.emplace(labstr, stmt{
+					std::move(seq), {}, std::move(mandvars), std::move(mandhyps), std::move(manddisjs), stmt::ASSERTION
+				});
 			}
-			++labc;
 		}
 	}
+	return ret;
 }
 
 int main(int argc, char **argv) {
-	std::ios_base::sync_with_stdio(false);
-	std::cin.tie(nullptr);
-	try {
-		if (argc == 1) {
-			preprocessor pre(std::cin);
-			eval(pre);
-			std::cout << "[INFO] STDIN OK!\n";
-		} else for (int i = 1; i < argc; ++i) {
-			if (!std::strcmp(argv[i], "-")) {
-				preprocessor pre(std::cin);
-				eval(pre);
-				std::cout << "[INFO] STDIN OK!\n";
+	ios_base::sync_with_stdio(false);
+	cin.tie(nullptr);
+
+	bool ret = true;
+	if (argc == 1) {
+		if ((ret = verify(cin)))
+			cout << "[INFO] Stdin OK!\n";
+		else cerr << "[WARN] Stdin not valid!\n";
+	} else {
+		bool ret = true;
+		for (int i = 1; i < argc; ++i) {
+			if (!strcmp(argv[i], "-")) {
+				bool v = verify(cin, {}, true);
+				if (v)
+					cout << "[INFO] Stdin OK!\n";
+				else cerr << "[WARN] Stdin not valid!\n";
+				ret &= v;
 			} else {
-				preprocessor pre(argv[i]);
-				eval(pre);
-				std::cout << "[INFO] DATABASE " << argv[i] << " OK!\n";
+				ifstream fin(argv[i]);
+				if (!fin) {
+					perror(argv[i]);
+					return EXIT_FAILURE;
+				}
+				bool v = verify(fin, argv[i], true);
+				if (v)
+					cout << "[INFO] Database " << argv[i] << " OK!\n";
+				else cerr << "[WARN] Database " << argv[i] << " not valid!\n";
+				ret &= v;
 			}
 		}
-	} catch (std::runtime_error const& err) {
-		std::cerr << err.what() << '\n';
-		return EXIT_FAILURE;
+		return ret ? EXIT_SUCCESS : EXIT_FAILURE;
 	}
-	return EXIT_SUCCESS;
 }

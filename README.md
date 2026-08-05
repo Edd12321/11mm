@@ -2,7 +2,7 @@
 
 *11mm* is a proof verifier for the [Metamath](https://us.metamath.org) language, written in C++11.
 
-It currently verifies `set.mm` in ~3s
+It currently verifies `set.mm` in ~2s (PGO, AMD Ryzen 5 7000 Series).
 
 ## Todo:
  - [ ] LaTeX and HTML conversion (`$t`);
