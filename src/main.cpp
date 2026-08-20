@@ -72,14 +72,15 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 		if (!filename.empty())
 			warn("Database " + filename + " not valid!");
 		else warn("Stdin not valid!");
-		return false;
+		in.setstate(ios::failbit);
+		return ret = false;
 	};
 
 	// metamath doesnt have \v
 	auto isspace = [](char c) {
 		return c == ' ' || c == '\n' || c == '\t' || c == '\f' || c == '\r';
 	};
-	auto rdtok = [&]() {
+	auto rdtok0 = [&](bool comment) {
 		auto rdword = [&]() {
 			char c;
 			while (in.get(c) && isspace(c)) ;
@@ -95,8 +96,8 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 		};
 
 		bool cmt = false;
-		while (++tokcnt, rdword()) {
-			if (tok == "$(") {
+		while (comment || (++tokcnt, rdword())) {
+			if (comment || tok == "$(") {
 				cmt = true;
 				while (++tokcnt, rdword())
 					if (tok == "$)") {
@@ -105,15 +106,22 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 					}
 				if (cmt)
 					return error("Unclosed comment");
+				if (comment)
+					return true;
 				continue;
 			}
 			return true;
 		}
 		return false;
 	};
-
+	auto rdtok = [&]() { return rdtok0(false); };
+	auto rdcom = [&]() { return rdtok0(true); };
 
 	if (reset) {
+		if (!incfiles.empty())
+			incfiles.clear();
+		tokcnt = symcnt = 0;
+
 		str2sym.clear();
 		str2stmt.clear();
 		disjs.clear();
@@ -414,11 +422,21 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 									in_ws = false;
 									++tokcnt;
 									if (c == '$') {
-										if (!in.get(c) || c != '.')
-											return error("(char #" + to_string(charcnt) + ") Expected . after $ in provable assertion " + labstr);
-										if (in.get(c) && !isspace(c))
-											return error("(char #" + to_string(charcnt) + ") Unexpected character after . in provable assertion " + labstr);
-										break;
+										if (++charcnt, !in.get(c))
+											return error("(char #" + to_string(charcnt) + ") Expected period or paren after $ in provable assertion " + labstr);
+										/* empty */ {
+											char exp_sp;
+											if (++charcnt, in.get(exp_sp) && !isspace(exp_sp))
+												return error("(char #" + to_string(charcnt) + ") Unexpected character in provable assertion " + labstr);
+										}
+
+										if (c == '.')
+											break;
+										if (c == '(') {
+											if (!rdcom())
+												return false;
+											continue;
+										} else return error("(char #" + to_string(charcnt) + ") Unexpected character in provable assertion " + labstr);
 									}
 								}
 							}
@@ -430,7 +448,8 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 									if (c == '?')
 										noproof = true;
 									else if (c < 'A' || c > 'Z')
-										return error("(char #" + to_string(charcnt) + ") Expected ? or uppercase character in compressed proof string in provable assertion " + labstr);
+										return error("(char #" + to_string(charcnt) + ") Expected ? or uppercase character in compressed proof string in provable assertion "
+										       + labstr);
 								
 									ok = true;
 									// this time i'll assume ascii again because metamath actually requires it + less effort
@@ -579,8 +598,8 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 
 					info("Theorem " + labstr + " OK!");
 					noproof_label:
-						if (noproof)
-							warn("Theorem " + labstr + " assumed to be true");
+					if (noproof)
+						warn("Theorem " + labstr + " assumed to be true");
 					proved = true;
 				}
 
@@ -609,10 +628,6 @@ int main(int argc, char **argv) {
 		ret = verify(cin);
 	else {
 		for (int i = 1; i < argc; ++i) {
-			if (!incfiles.empty())
-				incfiles.clear();
-			tokcnt = symcnt = 0;
-
 			bool v;
 			if (!strcmp(argv[i], "-"))
 				v = verify(cin, {}, true);
