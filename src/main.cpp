@@ -12,6 +12,8 @@
 using namespace std;
 using ull = unsigned long long;
 
+unordered_set<string> incfiles;
+
 struct sym {
 	ull id;
 	enum : unsigned char {
@@ -48,24 +50,30 @@ unordered_map<string, stmt> str2stmt;
 unordered_map<ull, unordered_map<ull, ull>> disjs;
 unordered_map<ull, pair<ull, bool>> symid2type;
 vector<stkclean> cleanup(1, stkclean{});
+ull tokcnt, symcnt;
 
 bool verify(istream& in, string const& filename = {}, bool reset = false) {
-	ull tokcnt = 0, symcnt = 0;
 	string tok;
 	bool ret = true;
-	auto error = [&](string const& str) {
-		cerr << "[ERROR @ token #" << tokcnt;
-		if (!filename.empty())
-			cerr << ", in file " << filename;
-		cerr << "] " << str << '\n';
-		return false;
-	};
+
 	auto info = [&](string const& str) {
 		cout << "[INFO] " << str << '\n';
 	};
 	auto warn = [&](string const& str) {
 		cerr << "[WARN] " << str << '\n';
 	};
+	auto error = [&](string const& str) {
+		cerr << "[ERROR @ token #" << tokcnt;
+		if (!filename.empty())
+			cerr << ", in file " << filename;
+		cerr << "] " << str << '\n';
+		
+		if (!filename.empty())
+			warn("Database " + filename + " not valid!");
+		else warn("Stdin not valid!");
+		return false;
+	};
+
 	auto rdtok = [&]() {
 		bool cmt = false;
 		while (++tokcnt, in >> tok) {
@@ -95,20 +103,27 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 		cleanup = vector<stkclean>(1, stkclean{});
 	}
 
+	if (!filename.empty())
+		incfiles.insert(filename);
+
 	while (rdtok()) {
 		// File inclusion
 		if (tok == "$[") {
 			if (!rdtok())
 				return error("Expected filename");
 			auto filename = std::move(tok);
-			if (!all_of(filename.begin(), filename.end(), [](char ch) { return ch != '$'; }))
-				return error("Filename contains $");
-			ifstream fin(filename);
-			if (!fin)
-				return error("Could not open file " + filename);
-			if (!rdtok() || tok != "$]")
-				return error("Expected end of file inclusion");
-			ret &= verify(fin, filename);
+			if (incfiles.find(filename) != incfiles.end())
+				warn("Ignored file inclusion " + filename);
+			else {
+				if (!all_of(filename.begin(), filename.end(), [](char ch) { return ch != '$'; }))
+					return error("Filename contains $");
+				ifstream fin(filename);
+				if (!fin)
+					return error("Could not open file " + filename);
+				if (!rdtok() || tok != "$]")
+					return error("Expected end of file inclusion");
+				ret &= verify(fin, filename);
+			}
 
 		// Block
 		} else if (tok == "${")
@@ -430,7 +445,7 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 						if (!ok)
 							return error("Empty compressed proof string in provable assertion " + labstr);
 						if (curr)
-							return error("Bad compressed proof string in provable assertion" + labstr);
+							return error("Bad compressed proof string in provable assertion " + labstr);
 					} else if (noproof)
 						goto noproof_label;
 					for (auto const& step : steps) {
@@ -541,7 +556,7 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 					info("Theorem " + labstr + " OK!");
 					noproof_label:
 						if (noproof)
-							warn("Theorem " + labstr + " assumed to be true!");
+							warn("Theorem " + labstr + " assumed to be true");
 					proved = true;
 				}
 
@@ -553,6 +568,11 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 			}
 		}
 	}
+	if (ret) {
+		if (filename.empty())
+			info("Stdin OK!");
+		else info("Database " + filename + " OK!");
+	}
 	return ret;
 }
 
@@ -561,32 +581,27 @@ int main(int argc, char **argv) {
 	cin.tie(nullptr);
 
 	bool ret = true;
-	if (argc == 1) {
-		if ((ret = verify(cin)))
-			cout << "[INFO] Stdin OK!\n";
-		else cerr << "[WARN] Stdin not valid!\n";
-	} else {
-		bool ret = true;
+	if (argc == 1)
+		ret = verify(cin);
+	else {
 		for (int i = 1; i < argc; ++i) {
-			if (!strcmp(argv[i], "-")) {
-				bool v = verify(cin, {}, true);
-				if (v)
-					cout << "[INFO] Stdin OK!\n";
-				else cerr << "[WARN] Stdin not valid!\n";
-				ret &= v;
-			} else {
+			if (!incfiles.empty())
+				incfiles.clear();
+			tokcnt = symcnt = 0;
+
+			bool v;
+			if (!strcmp(argv[i], "-"))
+				v = verify(cin, {}, true);
+			else {
 				ifstream fin(argv[i]);
 				if (!fin) {
 					perror(argv[i]);
 					return EXIT_FAILURE;
 				}
-				bool v = verify(fin, argv[i], true);
-				if (v)
-					cout << "[INFO] Database " << argv[i] << " OK!\n";
-				else cerr << "[WARN] Database " << argv[i] << " not valid!\n";
-				ret &= v;
+				v = verify(fin, argv[i], true);
 			}
+			ret &= v;
 		}
-		return ret ? EXIT_SUCCESS : EXIT_FAILURE;
 	}
+	return ret ? EXIT_SUCCESS : EXIT_FAILURE;
 }
