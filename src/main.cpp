@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -128,18 +129,18 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 		if (tok == "$[") {
 			if (!rdtok())
 				return error("Expected filename");
-			auto filename = std::move(tok);
-			if (incfiles.find(filename) != incfiles.end())
-				warn("Ignored file inclusion " + filename);
+			auto filename2 = std::move(tok);
+			if (incfiles.find(filename2) != incfiles.end())
+				warn("Ignored file inclusion of " + filename2 + " from " + filename);
 			else {
-				if (!all_of(filename.begin(), filename.end(), [](char ch) { return ch != '$'; }))
+				if (!all_of(filename2.begin(), filename2.end(), [](char ch) { return ch != '$'; }))
 					return error("Filename contains $");
-				ifstream fin(filename);
+				ifstream fin(filename2);
 				if (!fin)
-					return error("Could not open file " + filename);
+					return error("Could not open file " + filename2);
 				if (!rdtok() || tok != "$]")
 					return error("Expected end of file inclusion");
-				ret &= verify(fin, filename);
+				ret &= verify(fin, filename2);
 			}
 
 		// Block
@@ -426,8 +427,10 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 									in_ws = true;
 
 								else {
-									if (c < 'A' || c > 'Z')
-										return error("(char #" + to_string(charcnt) + ") Expected uppercase character in compressed proof string in provable assertion " + labstr);
+									if (c == '?')
+										noproof = true;
+									else if (c < 'A' || c > 'Z')
+										return error("(char #" + to_string(charcnt) + ") Expected ? or uppercase character in compressed proof string in provable assertion " + labstr);
 								
 									ok = true;
 									// this time i'll assume ascii again because metamath actually requires it + less effort
@@ -465,7 +468,9 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 							return error("Empty compressed proof string in provable assertion " + labstr);
 						if (curr)
 							return error("Bad compressed proof string in provable assertion " + labstr);
-					} else if (noproof)
+					}
+
+					if (noproof)
 						goto noproof_label;
 					for (auto const& step : steps) {
 						switch (step.type) {
@@ -615,7 +620,7 @@ int main(int argc, char **argv) {
 				ifstream fin(argv[i]);
 				if (!fin) {
 					perror(argv[i]);
-					return EXIT_FAILURE;
+					continue;
 				}
 				v = verify(fin, argv[i], true);
 			}
