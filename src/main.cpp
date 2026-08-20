@@ -74,12 +74,30 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 		return false;
 	};
 
+	// metamath doesnt have \v
+	auto isspace = [](char c) {
+		return c == ' ' || c == '\n' || c == '\t' || c == '\f' || c == '\r';
+	};
 	auto rdtok = [&]() {
+		auto rdword = [&]() {
+			char c;
+			while (in.get(c) && isspace(c)) ;
+			if (in.fail()) return false;
+			in.unget();
+			tok.clear();
+			while (in.get(c) && !isspace(c)) {
+				if (c < '!' || c > '~')
+					return error("Unprintable character " + string(1, c));
+				tok += c;
+			}
+			return !tok.empty();
+		};
+
 		bool cmt = false;
-		while (++tokcnt, in >> tok) {
+		while (++tokcnt, rdword()) {
 			if (tok == "$(") {
 				cmt = true;
-				while (++tokcnt, in >> tok)
+				while (++tokcnt, rdword())
 					if (tok == "$)") {
 						cmt = false;
 						break;
@@ -88,12 +106,11 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 					return error("Unclosed comment");
 				continue;
 			}
-			if (!all_of(tok.begin(), tok.end(), [](unsigned char ch) { return isprint(ch); }))
-				return error("Token not printable");
 			return true;
 		}
 		return false;
 	};
+
 
 	if (reset) {
 		str2sym.clear();
@@ -223,8 +240,10 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 				return error("Can't define label " + labstr + ", it already exists");
 			if (str2sym.find(labstr) != str2sym.end())
 				return error("Can't define label " + labstr + ", symbol already exists");
-			if (!all_of(labstr.begin(), labstr.end(), [](unsigned char ch) { return isalnum(ch) || ch == '.' || ch == '-' || ch == '_'; }))
-				return error("Label " + labstr + " not sane");
+			if (!all_of(labstr.begin(), labstr.end(), [](char ch) {
+				return ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'))
+				      || ch == '.' || ch == '-' || ch == '_';
+			})) return error("Label " + labstr + " not sane");
 			
 			if (!rdtok())
 				return error("Expected statement kind after label " + labstr);
@@ -407,7 +426,7 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 									in_ws = true;
 
 								else {
-									if (!isupper(c))
+									if (c < 'A' || c > 'Z')
 										return error("(char #" + to_string(charcnt) + ") Expected uppercase character in compressed proof string in provable assertion " + labstr);
 								
 									ok = true;
