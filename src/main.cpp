@@ -2,7 +2,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <functional>
 #include <iostream>
 #include <istream>
@@ -10,10 +9,43 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#define BUFSIZ_11MM (1 << 16)
 using namespace std;
 using ull = unsigned long long;
 
 unordered_set<string> incfiles;
+
+struct fastio {
+	FILE *fin;
+	char buf[BUFSIZ_11MM], last = '\0', next = '\0';
+	size_t pos = 0, end = 0;
+	bool fail = false;
+	
+	fastio(FILE *f) : fin(f) {}
+
+	bool get(char& c) {
+		if (fail) return false;
+		if (next) {
+			c = next;
+			next = '\0';
+			return true;
+		}
+		if (pos == end) {
+			end = fread(buf, 1, sizeof buf, fin);
+			pos = 0;
+			if (!end) {
+				fail = true;
+				return false;
+			}
+		}
+		last = c = buf[pos++];
+		return true;
+	}
+
+	void unget() {
+		next = last;
+	}
+};
 
 struct sym {
 	ull id;
@@ -53,7 +85,7 @@ unordered_map<ull, pair<ull, bool>> symid2type;
 vector<stkclean> cleanup(1, stkclean{});
 ull tokcnt, symcnt;
 
-bool verify(istream& in, string const& filename = {}, bool reset = false) {
+bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 	string tok;
 	bool ret = true;
 
@@ -72,7 +104,7 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 		if (!filename.empty())
 			warn("Database " + filename + " not valid!");
 		else warn("Stdin not valid!");
-		in.setstate(ios::failbit);
+		in.fail = true;
 		return ret = false;
 	};
 
@@ -83,10 +115,16 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 	auto rdtok0 = [&](bool comment) {
 		auto rdword = [&]() {
 			char c;
-			while (in.get(c) && isspace(c)) ;
-			if (in.fail()) return false;
-			in.unget();
+			while (in.get(c))
+				if (!isspace(c)) {
+					in.unget();
+					break;
+				}
+			if (in.pos >= in.end && !in.next)
+				return false;
+
 			tok.clear();
+			
 			while (in.get(c) && !isspace(c)) {
 				if (c < '!' || c > '~')
 					return error("Unprintable character " + string(1, c));
@@ -143,12 +181,15 @@ bool verify(istream& in, string const& filename = {}, bool reset = false) {
 			else {
 				if (!all_of(filename2.begin(), filename2.end(), [](char ch) { return ch != '$'; }))
 					return error("Filename contains $");
-				ifstream fin(filename2);
+				FILE *fin = fopen(filename2.c_str(), "r");
 				if (!fin)
 					return error("Could not open file " + filename2);
-				if (!rdtok() || tok != "$]")
+				if (!rdtok() || tok != "$]") {
+					fclose(fin);
 					return error("Expected end of file inclusion");
+				}
 				ret &= verify(fin, filename2);
+				fclose(fin);
 			}
 
 		// Block
@@ -625,22 +666,21 @@ int main(int argc, char **argv) {
 
 	bool ret = true;
 	if (argc == 1)
-		ret = verify(cin);
-	else {
-		for (int i = 1; i < argc; ++i) {
-			bool v;
-			if (!strcmp(argv[i], "-"))
-				v = verify(cin, {}, true);
-			else {
-				ifstream fin(argv[i]);
-				if (!fin) {
-					perror(argv[i]);
-					continue;
-				}
-				v = verify(fin, argv[i], true);
+		ret = verify(stdin);
+	else for (int i = 1; i < argc; ++i) {
+		bool v;
+		if (!strcmp(argv[i], "-"))
+			v = verify(stdin, {}, true);
+		else {
+			FILE *fin = fopen(argv[i], "r");
+			if (!fin) {
+				perror(argv[i]);
+				continue;
 			}
-			ret &= v;
+			v = verify(fin, argv[i], true);
+			fclose(fin);
 		}
+		ret &= v;
 	}
 	return ret ? EXIT_SUCCESS : EXIT_FAILURE;
 }
