@@ -548,9 +548,9 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 							case step::STATEMENT:
 								switch (step.ptr->kind) {
 									case stmt::FLOATING_HYP: /* FALLTHROUGH */
-									case stmt::IN_FLOATING_HYP: /* FALLTHROUGH */
+									//case stmt::IN_FLOATING_HYP: /* FALLTHROUGH */
 									case stmt::ESSENTIAL_HYP: /* FALLTHROUGH */
-									case stmt::IN_ESSENTIAL_HYP:
+									//case stmt::IN_ESSENTIAL_HYP:
 										proof_stk.push_back(step.ptr->syms);
 										break;
 
@@ -628,6 +628,9 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 											proof_stk.push_back(subst_seq(step.ptr->syms));
 										}
 										break;
+
+									default:
+										return error("Referenced proof step is not active");
 								}
 								break;
 						}
