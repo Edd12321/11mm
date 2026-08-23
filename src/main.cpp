@@ -227,10 +227,10 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 
 		// Constants
 		} else if (tok == "$c") {
+			if (cleanup.size() != 1)
+				return error("Constant statement not in outermost scope");
 			bool ok = false;
 			for (;;) {
-				if (cleanup.size() != 1)
-					return error("Constant statement not in outermost scope");
 				if (!rdtok())
 					return error("Expected end of constant statement");
 				if (tok == "$.") {
