@@ -524,7 +524,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 								}
 							}
 						}
-						if (!ok)
+						if (!ok && !noproof)
 							return error("Empty compressed proof string in provable assertion " + labstr);
 						if (curr)
 							return error("Bad compressed proof string in provable assertion " + labstr);
@@ -656,6 +656,8 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 		}
 	}
 	if (ret) {
+		if (cleanup.size() != 1)
+			return error("Unclosed block");
 		if (filename.empty())
 			info("Stdin OK!");
 		else info("Database " + filename + " OK!");
