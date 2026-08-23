@@ -220,11 +220,16 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 
 		// Constants
 		} else if (tok == "$c") {
+			bool ok = false;
 			for (;;) {
 				if (!rdtok())
 					return error("Expected end of constant statement");
-				if (tok == "$.")
+				if (tok == "$.") {
+					if (!ok)
+						return error("Empty constant statement");
 					break;
+				}
+				ok = true;
 				if (!all_of(tok.begin(), tok.end(), [](char ch) { return ch != '$'; }))
 					return error("Constant symbol " + tok + " contains $");
 				auto fnd = str2sym.find(tok);
@@ -237,11 +242,16 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 			}
 		// Variables
 		} else if (tok == "$v") {
+			bool ok = false;
 			for (;;) {
 				if (!rdtok())
 					return error("Expected end of variable statement");
-				if (tok == "$.")
+				if (tok == "$.") {
+					if (!ok)
+						return error("Empty variable statement");
 					break;
+				}
+				ok = true;
 				if (!all_of(tok.begin(), tok.end(), [](char ch) { return ch != '$'; }))
 					return error("Variable symbol " + tok + " contains $");
 				auto fnd = str2sym.find(tok);
@@ -261,19 +271,24 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 				}
 			}
 
-		// Disjoint variable conditions
+		// Disjoint variable restrictions
 		} else if (tok == "$d") {
 			unordered_set<ull> varids;
+			unsigned char ok = 0;
 			for (;;) {
 				if (!rdtok())
 					return error("Expected end of disjoint variable statement");
-				if (tok == "$.")
+				if (tok == "$.") {
+					if (ok != 2)
+						return error("Disjoint variable statement doesn't contain at least two variables");
 					break;
+				}
+				if (ok < 2) ++ok;
 				auto fnd = str2sym.find(tok);
 				if (fnd == str2sym.end() || fnd->second.kind != sym::VARIABLE)
 					return error("No such active variable symbol " + tok);
 				if (varids.find(fnd->second.id) != varids.end())
-					return error("Variable " + tok + " already in the disjoint variable condition");
+					return error("Variable " + tok + " already in the disjoint variable restricion");
 				varids.insert(fnd->second.id);
 			}
 			for (auto it = varids.begin(); it != varids.end(); ++it)
@@ -593,7 +608,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 											// STEP 2: get rid of $e and $f
 											proof_stk.resize(base);
 
-											// STEP 3: verify disjoint variable conditions
+											// STEP 3: verify disjoint variable restrictions
 											for (auto const& it : step.ptr->manddisjs) {
 												auto x = it.first, y = it.second;
 												auto f1 = substmap.find(x), f2 = substmap.find(y);
@@ -606,7 +621,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 														if (b.kind != sym::VARIABLE)
 															continue;
 														if (a.id == b.id)
-															return error("Disjoint variable condition violation (two same variables) in provable assertion " + labstr);
+															return error("Disjoint variable restriction violation (two same variables) in provable assertion " + labstr);
 														
 														auto A = min(a.id, b.id), B = max(a.id, b.id);
 														bool ok = false;
@@ -617,8 +632,8 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 																ok = true;
 														}
 														if (!ok)
-															return error("Disjoint variable condition violation (two variables mapped in the substitution map by variables "
-															             "in a disjoint variable condition aren't in a disjoint variable condition in provable assertion "
+															return error("Disjoint variable restriction violation (two variables mapped in the substitution map by variables "
+															             "in a disjoint variable restriction aren't in a disjoint variable restriction in provable assertion "
 															             + labstr);
 													}
 												}
