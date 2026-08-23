@@ -222,6 +222,8 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 		} else if (tok == "$c") {
 			bool ok = false;
 			for (;;) {
+				if (cleanup.size() != 1)
+					return error("Constant statement not in outermost scope");
 				if (!rdtok())
 					return error("Expected end of constant statement");
 				if (tok == "$.") {
@@ -317,7 +319,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 			if (!rdtok())
 				return error("Expected typecode");
 			auto fnd = str2sym.find(tok);
-			if (fnd == str2sym.end())
+			if (fnd == str2sym.end() || fnd->second.kind != sym::CONSTANT)
 				return error("No such active constant (for use as typecode) " + tok);
 			typecode = fnd->second.id;
 
