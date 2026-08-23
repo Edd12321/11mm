@@ -5,13 +5,15 @@
 #include <functional>
 #include <iostream>
 #include <istream>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#define BUFSIZ_11MM (1 << 16)
 using namespace std;
 using ull = unsigned long long;
+constexpr size_t BUFSIZ_11MM = 65536;
+constexpr ull MAXVAL_11MM = numeric_limits<ull>::max();
 
 unordered_set<string> incfiles;
 
@@ -137,11 +139,14 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 		while (comment || (++tokcnt, rdword())) {
 			if (comment || tok == "$(") {
 				cmt = true;
-				while (++tokcnt, rdword())
+				while (++tokcnt, rdword()) {
 					if (tok == "$)") {
 						cmt = false;
 						break;
 					}
+					if (tok == "$(")
+						return error("Attempted comment nesting");
+				}
 				if (cmt)
 					return error("Unclosed comment");
 				if (comment)
@@ -173,6 +178,8 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 	while (rdtok()) {
 		// File inclusion
 		if (tok == "$[") {
+			if (cleanup.size() != 1)
+				return error("File inclusion not in outermost scope");
 			if (!rdtok())
 				return error("Expected filename");
 			auto filename2 = std::move(tok);
@@ -383,6 +390,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 
 				/* (1) */ unordered_set<ull> mandvars;
 				/* (2) */ vector<stmt*> mandhyps;
+				          unordered_set<stmt*> mandhyps_unordered; // just for O(1) when checking in the compressed proofs part
 				/* (3) */ vector<pair<ull, ull>> manddisjs;
 
 				vector<sym> seq = {{typecode, sym::CONSTANT}};
@@ -416,7 +424,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 					for (auto const& hyp : it.hyps)
 						if ((hyp.get().kind == stmt::ESSENTIAL_HYP)
 						||  (hyp.get().kind == stmt::FLOATING_HYP && mandvars.find(hyp.get().syms[1].id) != mandvars.end()))
-							/* (2): 1/2, 2/2 */ mandhyps.push_back(&hyp.get());
+							/* (2): 1/2, 2/2 */ mandhyps.push_back(&hyp.get()), mandhyps_unordered.insert(&hyp.get());
 					for (auto const& disj : it.disjs)
 						if (mandvars.find(disj.first) != mandvars.end() && mandvars.find(disj.second) != mandvars.end())
 							/* (3): 1/1 */ manddisjs.emplace_back(disj);
@@ -462,6 +470,10 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 							auto fnd = str2stmt.find(tok);
 							if (fnd == str2stmt.end() || fnd->second.kind == stmt::IN_ESSENTIAL_HYP || fnd->second.kind == stmt::IN_FLOATING_HYP)
 								return error("No such active label " + tok + " in provable assertion " + labstr);
+							if (compressed
+							&& (fnd->second.kind == stmt::ESSENTIAL_HYP || fnd->second.kind == stmt::IN_FLOATING_HYP)
+							&& (mandhyps_unordered.find(&fnd->second) != mandhyps_unordered.end()))
+								return error("Hypothesis " + tok + " is not non-mandatory");
 							steps.push_back(step{step::STATEMENT, 0, &fnd->second});
 						}
 					}
@@ -518,11 +530,15 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 										last20 = false;
 									
 									} else if (c >= 'U' && c <= 'Y') {
+										if (curr > (MAXVAL_11MM - (c - 'U' + 1)) / 5)
+											return error("Integer overflow");
 										curr = curr * 5 + c - 'U' + 1;
 										last20 = false;
 									
 									// c >= 'A' && c <= 'T'
 									} else {
+										if (curr > (MAXVAL_11MM - (c - 'A')) / 20)
+											return error("Integer overflow");
 										curr = curr * 20 + c - 'A';
 										if (curr < mandhyps.size())
 											steps.push_back(step{step::STATEMENT, 0, mandhyps[curr]});
