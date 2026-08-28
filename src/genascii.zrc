@@ -1,0 +1,49 @@
+#!/usr/bin/env zrc
+# only run this script on ascii system
+cd `{dirname $1}
+
+> asciiwarn.hpp eval {
+	echo {
+#ifndef ASCIIWARN_HPP
+#define ASCIIWARN_HPP
+#undef W
+#undef X
+#undef MSG
+#define W(a, b) static_assert(a == b, "Metamath spec assumes ASCII encoding for this reserved char");
+#define X(m, a, M) static_assert(m <= a && a <= M, "Metamath spec assumes characters in this range match ASCII range");
+#define MSG "Metamath spec assumes one of two ASCII encodings for that char"
+	}
+	for {set c = [ord '!']} {$c <= [ord '~']} {inc c} {
+		set cl = [chr $c]
+		set cl2 = $cl
+		if {$c == [ord \'] || $c == [ord \\]} {
+			set cl2 = \\$cl
+		}
+		if {$c >= [ord 'A'] && $c <= [ord 'Z']
+		|| [str $cl =~ {^(a|c|d|e|f|p|v|\{|\}|\(|\)|\$|\[|\]|\.|\=)$}]} {
+			printf "W('%s', 0x%X) " $cl2 $c
+		} else {
+			if {$c == [ord '-'] || $c == [ord '_']} {
+				printf "\nstatic_assert('%s' == 0x%X || '%s' == 0x%X, MSG);\n" \
+					$cl2 [ord '-'] $cl2 [ord '_']
+			} else {
+				if {$c >= [ord 'a'] && $c <= [ord 'z']} {
+					set m = [ord 'a'] M = [ord 'z']
+				} else if {$c >= [ord '0'] && $c <= [ord '9']} {
+					set m = [ord '0'] M = [ord '9']
+				} else {
+					set m = [ord '!'] M = [ord '~']
+				}
+				printf "X(0x%X, '%s', 0x%X) " $m $cl2 $M
+			}
+		}
+		if {$c % 4 == 0} echo
+	}
+	echo {
+#undef MSG
+#undef X
+#undef W
+#endif // ASCIIWARN_HPP
+	}
+}
+exit 0

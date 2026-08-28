@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include "asciiwarn.hpp"
 using namespace std;
 using ull = unsigned long long;
 constexpr size_t BUFSIZ_11MM = 65536;
@@ -112,7 +113,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 
 	// metamath doesnt have \v
 	auto isspace = [](char c) {
-		return c == ' ' || c == '\n' || c == '\t' || c == '\f' || c == '\r';
+		return c == 0x20 || c == 0xA || c == 0x9 || c == 0xC || c == 0xD;
 	};
 	auto rdtok0 = [&](bool comment) {
 		auto rdword = [&]() {
@@ -188,7 +189,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 			else {
 				if (!all_of(filename2.begin(), filename2.end(), [](char ch) { return ch != '$'; }))
 					return error("Filename contains $");
-				FILE *fin = fopen(filename2.c_str(), "r");
+				FILE *fin = fopen(filename2.c_str(), "rb");
 				if (!fin)
 					return error("Could not open file " + filename2);
 				if (!rdtok() || tok != "$]") {
@@ -710,7 +711,7 @@ int main(int argc, char **argv) {
 		if (!strcmp(argv[i], "-"))
 			v = verify(stdin, {}, true);
 		else {
-			FILE *fin = fopen(argv[i], "r");
+			FILE *fin = fopen(argv[i], "rb");
 			if (!fin) {
 				perror(argv[i]);
 				continue;
