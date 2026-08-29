@@ -6,12 +6,8 @@ cd `{dirname $1}
 	echo {
 #ifndef ASCIIWARN_HPP
 #define ASCIIWARN_HPP
-#undef W
-#undef X
 #undef MSG
-#define W(a, b) static_assert(a == b, "Metamath spec assumes ASCII encoding for this reserved char");
-#define X(m, a, M) static_assert(m <= a && a <= M, "Metamath spec assumes characters in this range match ASCII range");
-#define MSG "Metamath spec assumes one of two ASCII encodings for that char"
+#define MSG "Metamath character set not respected"
 	}
 	for {set c = [ord '!']} {$c <= [ord '~']} {inc c} {
 		set cl = [chr $c]
@@ -20,11 +16,11 @@ cd `{dirname $1}
 			set cl2 = \\$cl
 		}
 		if {$c >= [ord 'A'] && $c <= [ord 'Z']
-		|| [str $cl =~ {^(a|c|d|e|f|p|v|\{|\}|\(|\)|\$|\[|\]|\.|\=)$}]} {
-			printf "W('%s', 0x%X) " $cl2 $c
+		|| [str $cl =~ {^(a|c|d|e|f|p|v|\{|\}|\(|\)|\$|\[|\]|\.|\=|\?)$}]} {
+			printf "static_assert('%s' == 0x%X, MSG);\n" $cl2 $c
 		} else {
 			if {$c == [ord '-'] || $c == [ord '_']} {
-				printf "\nstatic_assert('%s' == 0x%X || '%s' == 0x%X, MSG);\n" \
+				printf "static_assert('%s' == 0x%X || '%s' == 0x%X, MSG);\n" \
 					$cl2 [ord '-'] $cl2 [ord '_']
 			} else {
 				if {$c >= [ord 'a'] && $c <= [ord 'z']} {
@@ -34,15 +30,13 @@ cd `{dirname $1}
 				} else {
 					set m = [ord '!'] M = [ord '~']
 				}
-				printf "X(0x%X, '%s', 0x%X) " $m $cl2 $M
+				printf "static_assert(0x%X <= '%s' && '%s' <= 0x%X, MSG);\n" \
+					$m $cl2 $cl2 $M
 			}
 		}
-		if {$c % 4 == 0} echo
 	}
 	echo {
 #undef MSG
-#undef X
-#undef W
 #endif // ASCIIWARN_HPP
 	}
 }
