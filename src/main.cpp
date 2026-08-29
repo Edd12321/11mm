@@ -184,20 +184,26 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 			if (!rdtok())
 				return error("Expected filename");
 			auto filename2 = std::move(tok);
-			if (incfiles.find(filename2) != incfiles.end())
+			bool ign = false;
+			if (incfiles.find(filename2) != incfiles.end()) {
+				ign = true;
 				warn("Ignored file inclusion of " + filename2 + " from " + filename);
-			else {
-				if (!all_of(filename2.begin(), filename2.end(), [](char ch) { return ch != '$'; }))
-					return error("Filename contains $");
-				FILE *fin = fopen(filename2.c_str(), "rb");
+			} else if (!all_of(filename2.begin(), filename2.end(), [](char ch) { return ch != '$'; }))
+				return error("Filename contains $");
+
+			FILE *fin = nullptr;
+			if (!ign) {
+				fin = fopen(filename2.c_str(), "rb");
 				if (!fin)
 					return error("Could not open file " + filename2);
-				if (!rdtok() || tok != "$]") {
-					fclose(fin);
-					return error("Expected end of file inclusion");
-				}
+			}
+			if (!rdtok() || tok != "$]") {
+				if (fin) fclose(fin);
+				return error("Expected end of file inclusion");
+			}
+			if (!ign) {
 				ret &= verify(fin, filename2);
-				fclose(fin);
+				if (fin) fclose(fin);
 			}
 
 		// Block
