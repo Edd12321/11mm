@@ -129,7 +129,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 			tok.clear();
 			
 			while (in.get(c) && !isspace(c)) {
-				if (c < '!' || c > '~')
+				if (c < 0x21 || c > 0x7E)
 					return error("Unprintable character " + string(1, c));
 				tok += c;
 			}
@@ -145,8 +145,8 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 						cmt = false;
 						break;
 					}
-					if (tok == "$(")
-						return error("Attempted comment nesting");
+					if (tok.find("$(") != string::npos || tok.find("$)") != string::npos)
+						return error("Comment contains $( or $)");
 				}
 				if (cmt)
 					return error("Unclosed comment");
