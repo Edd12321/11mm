@@ -293,10 +293,10 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 			unsigned char ok = 0;
 			for (;;) {
 				if (!rdtok())
-					return error("Expected end of disjoint variable statement");
+					return error("Expected end of DVR");
 				if (tok == "$.") {
 					if (ok != 2)
-						return error("Disjoint variable statement doesn't contain at least two variables");
+						return error("DVR doesn't contain at least two variables");
 					break;
 				}
 				if (ok < 2) ++ok;
@@ -304,7 +304,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 				if (fnd == str2sym.end() || fnd->second.kind != sym::VARIABLE)
 					return error("No such active variable symbol " + tok);
 				if (varids.find(fnd->second.id) != varids.end())
-					return error("Variable " + tok + " already in the disjoint variable restricion");
+					return error("Variable " + tok + " already in the DVR");
 				varids.insert(fnd->second.id);
 			}
 			for (auto it = varids.begin(); it != varids.end(); ++it)
@@ -645,9 +645,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 													for (auto const& b : f2->second) {
 														if (b.kind != sym::VARIABLE)
 															continue;
-														if (a.id == b.id)
-															return error("Disjoint variable restriction violation (two same variables) in provable assertion " + labstr);
-														
+
 														auto A = min(a.id, b.id), B = max(a.id, b.id);
 														bool ok = false;
 														auto fnd2 = disjs.find(A);
@@ -657,9 +655,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 																ok = true;
 														}
 														if (!ok)
-															return error("Disjoint variable restriction violation (two variables mapped in the substitution map by variables "
-															             "in a disjoint variable restriction aren't in a disjoint variable restriction in provable assertion "
-															             + labstr);
+															return error("DVR violation in provable assertion " + labstr);
 													}
 												}
 											}
