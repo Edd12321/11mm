@@ -188,7 +188,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 			if (incfiles.find(filename2) != incfiles.end()) {
 				ign = true;
 				warn("Ignored file inclusion of " + filename2 + " from " + filename);
-			} else if (!all_of(filename2.begin(), filename2.end(), [](char ch) { return ch != '$'; }))
+			} else if (filename2.find('$') != string::npos)
 				return error("Filename contains $");
 
 			FILE *fin = nullptr;
@@ -246,7 +246,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 					break;
 				}
 				ok = true;
-				if (!all_of(tok.begin(), tok.end(), [](char ch) { return ch != '$'; }))
+				if (tok.find('$') != string::npos)
 					return error("Constant symbol " + tok + " contains $");
 				auto fnd = str2sym.find(tok);
 				if (fnd != str2sym.end())
@@ -268,7 +268,7 @@ bool verify(fastio&& in, string const& filename = {}, bool reset = false) {
 					break;
 				}
 				ok = true;
-				if (!all_of(tok.begin(), tok.end(), [](char ch) { return ch != '$'; }))
+				if (tok.find('$') != string::npos)
 					return error("Variable symbol " + tok + " contains $");
 				auto fnd = str2sym.find(tok);
 				if (fnd == str2sym.end()) {
