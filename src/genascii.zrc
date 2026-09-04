@@ -16,6 +16,7 @@ cd `{dirname $1}
 			set cl2 = \\$cl
 		}
 		if {$c >= [ord 'A'] && $c <= [ord 'Z']
+		||  $c >= [ord '0'] && $c <= [ord '9']
 		|| [str $cl =~ {^(a|c|d|e|f|p|v|\{|\}|\(|\)|\$|\[|\]|\.|\=|\?)$}]} {
 			printf "static_assert('%s' == 0x%X, MSG);\n" $cl2 $c
 		} else {
@@ -25,8 +26,6 @@ cd `{dirname $1}
 			} else {
 				if {$c >= [ord 'a'] && $c <= [ord 'z']} {
 					set m = [ord 'a'] M = [ord 'z']
-				} else if {$c >= [ord '0'] && $c <= [ord '9']} {
-					set m = [ord '0'] M = [ord '9']
 				} else {
 					set m = [ord '!'] M = [ord '~']
 				}
